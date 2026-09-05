@@ -128,7 +128,8 @@
 
   .loc-or{ display:flex; align-items:center; gap:10px; margin: 18px 0 12px; color: var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:1px; font-weight:700; }
   .loc-or::before, .loc-or::after{ content:""; flex:1; height:1px; background: var(--line); }
-  .loc-search-row{ display:flex; gap:8px; }
+  .loc-search-row{ display:flex; gap:8px; flex-wrap:wrap; }
+  .loc-search-row .text-input{ min-width:120px; }
   .text-input{
     flex:1; min-width:0;
     background: rgba(251,243,233,0.05);
@@ -141,7 +142,7 @@
   .text-input::placeholder{ color: var(--muted); font-weight:500; }
   .text-input:focus-visible{ outline: 2px solid var(--accent-2); outline-offset: 2px; }
   .btn-search{
-    flex:0 0 auto; width:auto; padding: 0 18px;
+    flex:0 0 auto; width:auto; padding: 0 14px; font-size:13.5px;
     background: linear-gradient(120deg, var(--accent), #ff8f68); color:#241016;
   }
 
@@ -174,14 +175,21 @@
   .chip.mint{ color: var(--mint); border-color: rgba(127,191,160,0.4); }
 
   .result-card.clickable, .timeline-content.clickable{ cursor:pointer; transition: border-color .15s ease, transform .15s ease; }
+  .result-card.clickable{ border-color: rgba(255,200,87,0.35); }
   .result-card.clickable:hover, .result-card.clickable:focus-visible{ border-color: var(--accent-2); }
   .result-card.clickable:active{ transform: scale(0.99); }
-  .timeline-content.clickable:hover .maps-hint, .timeline-content.clickable:focus-visible .maps-hint,
-  .result-card.clickable:hover .maps-hint, .result-card.clickable:focus-visible .maps-hint{ color: var(--accent-2); }
   .maps-hint{
-    display:flex; align-items:center; gap:5px;
-    font-size:11px; font-weight:700; color: var(--muted);
-    margin-top:12px; text-transform:uppercase; letter-spacing:0.4px;
+    display:inline-flex; align-items:center; gap:6px;
+    font-size:12px; font-weight:800; color: #2a1a08;
+    margin-top:14px; text-transform:uppercase; letter-spacing:0.4px;
+    background: var(--accent-2);
+    padding: 8px 14px;
+    border-radius:100px;
+    transition: transform .15s ease, filter .15s ease;
+  }
+  .result-card.clickable:hover .maps-hint, .result-card.clickable:focus-visible .maps-hint,
+  .timeline-content.clickable:hover .maps-hint, .timeline-content.clickable:focus-visible .maps-hint{
+    filter: brightness(1.08); transform: translateX(2px);
   }
 
   .loading-wrap{ display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; gap:18px; }
@@ -497,8 +505,24 @@ const PlacesProvider = (() => {
     return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
   }
 
+  // Härleder om ett ställe serverar mat / alkohol / fika utifrån dess
+  // typ-text och befintliga taggar — oavsett om det kommer från mockdata
+  // eller Google Places (som bara ger en typ-etikett, t.ex. "Bar" eller
+  // "Restaurant"). Det gör att en fritextvibe som "mat och bar" faktiskt
+  // kan hitta — och prioritera — ställen som är BÅDA delarna, inte bara
+  // ett av dem.
+  function deriveCapabilityTags(p){
+    const hay = ((p.type || "") + " " + (p.tags || []).join(" ")).toLowerCase();
+    const extra = [];
+    if(/restaurang|restaurant|kök|krog|matsal|bistro|grill|pizza|sushi|thai|asiat|italiensk|indisk|fisk|kebab|burgare|mat/.test(hay)) extra.push("Mat");
+    if(/\bbar\b|pub|vin bar|vinbar|wine|öl|beer|cocktail|drink|speakeasy|nattklubb|night_club|brewery|bryggeri/.test(hay)) extra.push("Alkohol");
+    if(/kaffe|fika|bakverk|café|cafe|bakery|kondis/.test(hay)) extra.push("Fika");
+    return extra.filter(t => !(p.tags || []).includes(t));
+  }
+
   async function getPlaces(criteria){
-    return CONFIG.USE_LIVE_DATA ? fetchLive(criteria) : fetchMock(criteria);
+    const places = CONFIG.USE_LIVE_DATA ? await fetchLive(criteria) : await fetchMock(criteria);
+    return places.map(p => ({ ...p, tags: [...(p.tags || []), ...deriveCapabilityTags(p)] }));
   }
 
   return { getPlaces };
@@ -1131,33 +1155,70 @@ const VIBE_PRESETS = [
 // typLabels från Google Places redan använder, så en egen vibe viktar
 // matchningarna på precis samma sätt som en förvald preset gör.
 const VIBE_KEYWORDS = [
-  { words:["mysig","mys","chill","skön","hemtrevlig"],               tags:["Mysigt","Avslappnat"],             adventure:2 },
-  { words:["lugn","stress","vila","andas ut","harmoni"],             tags:["Lugnt","Avslappnat"],               adventure:1 },
-  { words:["prat","samtal","snack","djup","kvalitetstid"],           tags:["Bra för samtal","Mysigt"],          adventure:2 },
-  { words:["romantis","dejt","kärlek","candlelight","tvåsamhet"],    tags:["Romantiskt","Datevänligt"],         adventure:3 },
-  { words:["fest","party","dans","pumpa","högt tempo"],              tags:["Livlig stämning","Socialt"],        adventure:4 },
-  { words:["socialt","folk","umgås","gäng","högt i tak"],            tags:["Socialt","Livlig stämning","Högt i tak"], adventure:3 },
-  { words:["vilt","galet","äventyr","spontan","oväntat","nytt"],     tags:["Äventyrligt"],                      adventure:5 },
-  { words:["hemlig","dold","speakeasy","exklusiv"],                  tags:["Hemlig entré","Äventyrligt"],       adventure:5 },
-  { words:["utsikt","tak","panorama","högt upp"],                    tags:["Utsikt"],                           adventure:3 },
-  { words:["hav","vatten","hamn","sjö","strand"],                    tags:["Havsnära"],                         adventure:2 },
-  { words:["billigt","prisvärt","student","spara","budget"],         tags:["Prisvärt"],                         adventure:2 },
-  { words:["hälsosam","vegetarisk","vegan","grönt","clean"],         tags:["Hälsosamt"],                        adventure:2 }
+  { words:["mysig","mys","chill","skön","hemtrevlig","kvällsmys"],                         tags:["Mysigt","Avslappnat"],             adventure:2 },
+  { words:["lugn","stress","vila","andas ut","harmoni","skönt tempo","stillsam"],           tags:["Lugnt","Avslappnat"],               adventure:1 },
+  { words:["prat","samtal","snack","djup","kvalitetstid","snacka"],                         tags:["Bra för samtal","Mysigt"],          adventure:2 },
+  { words:["romantis","dejt","kärlek","candlelight","tvåsamhet","förälskad","smek"],        tags:["Romantiskt","Datevänligt"],         adventure:3 },
+  { words:["fest","party","dans","pumpa","högt tempo","clubbing","klubb","nattklubb","disco"], tags:["Livlig stämning","Socialt"],     adventure:4 },
+  { words:["socialt","folk","umgås","gäng","högt i tak","kompisar","vänner"],               tags:["Socialt","Livlig stämning","Högt i tak"], adventure:3 },
+  { words:["vilt","galet","äventyr","spontan","oväntat","nytt","annorlunda","udda"],        tags:["Äventyrligt"],                      adventure:5 },
+  { words:["hemlig","dold","speakeasy","exklusiv","gömd"],                                  tags:["Hemlig entré","Äventyrligt"],       adventure:5 },
+  { words:["utsikt","tak","panorama","högt upp","takterrass"],                              tags:["Utsikt"],                           adventure:3 },
+  { words:["hav","vatten","hamn","sjö","strand","brygga"],                                  tags:["Havsnära"],                         adventure:2 },
+  { words:["billigt","prisvärt","student","spara","budget","fyndigt"],                      tags:["Prisvärt"],                         adventure:2 },
+  { words:["hälsosam","vegetarisk","vegan","grönt","clean","nyttigt","råkost"],              tags:["Hälsosamt"],                        adventure:2 },
+  // Mat/matlagning — generellt, plus vanliga kök/rätter, så fler texter fångas.
+  { words:["mat","äta","middag","lunch","frukost","brunch","krog","restaurang","matig",
+            "sushi","pizza","pasta","burgare","tacos","kebab","asiatisk","thai","indisk",
+            "italiensk","mexikansk","grill","bbq","skaldjur","fisk","kött","dessert"],       tags:["Mat"],                              adventure:3 },
+  // Bar/alkohol — eget spår så det går att kombinera fritt med "Mat" ovan.
+  { words:["bar","alkohol","drink","drinkar","öl","vin","cocktail","cocktails","sprit",
+            "pub","bryggeri","vinbar","ölhall","shots"],                                    tags:["Alkohol"],                          adventure:3 },
+  // Fika/kaffe.
+  { words:["fika","kaffe","bakverk","kondis","kaka","bulle","cafe","café"],                  tags:["Fika","Avslappnat"],                adventure:2 },
+  { words:["barn","familj","barnvänlig","unge","barnvagn"],                                  tags:["Familjevänligt","Avslappnat"],      adventure:1 },
+  { words:["utomhus","uteservering","terrass","sol","picknick"],                             tags:["Utomhus"],                          adventure:2 },
+  { words:["musik","liveband","live","karaoke","konsert","dj"],                              tags:["Livemusik","Socialt"],              adventure:4 },
+  { words:["sport","fotboll","match","hockey","basket"],                                     tags:["Sportbar","Socialt"],               adventure:3 }
 ];
 
+// Delar upp fritexten i ord och matchar varje nyckelord mot ordgränser
+// (inte bara "innehåller" på hela strängen), så kortare ord som "mat"
+// eller "bar" inte råkar missa pga ordform, samtidigt som t.ex. "matcha"
+// inte felaktigt triggar "mat". Om texten innehåller flera skilda begrepp
+// (t.ex. "mat och bar") plockas taggar från *varje* träffad kategori upp,
+// så resultatet blir en kombination — precis som en riktig tolkning skulle
+// väga in båda önskemålen samtidigt.
 function analyzeVibeText(text){
   const lower = text.toLowerCase();
+  const tokens = lower.match(/[a-zåäö0-9]+/g) || [];
   const tags = new Set();
   let advSum = 0, advHits = 0;
+
   VIBE_KEYWORDS.forEach(k => {
-    if(k.words.some(w => lower.includes(w))){
+    const hit = k.words.some(w => {
+      // Flerordsfraser (t.ex. "andas ut") matchas som substräng,
+      // enskilda ord matchas mot hela tokens för att undvika falska träffar.
+      if(w.includes(" ")) return lower.includes(w);
+      return tokens.some(t => t === w || t.startsWith(w) && w.length >= 4);
+    });
+    if(hit){
       k.tags.forEach(t => tags.add(t));
       advSum += k.adventure; advHits++;
     }
   });
+
+  // Ingen känd nyckelordskategori hittades — snarare än att ge upp helt
+  // (och blockera användaren) gissar vi en rimlig, neutral profil utifrån
+  // textens längd/ton så det alltid går att gå vidare med något resultat,
+  // precis som ett resonerande verktyg skulle göra en bästa gissning.
+  if(!advHits){
+    return { tags: [], adventure: 3, understood:false };
+  }
   return {
     tags: Array.from(tags),
-    adventure: advHits ? Math.min(5, Math.max(1, Math.round(advSum / advHits))) : 3
+    adventure: Math.min(5, Math.max(1, Math.round(advSum / advHits))),
+    understood:true
   };
 }
 
@@ -1177,12 +1238,12 @@ function renderVibe(){
     </div>
     <div class="loc-or">eller skriv er egen</div>
     <div class="loc-search-row">
-      <input type="text" class="text-input" id="vibeInput" placeholder='T.ex. "chill utan stress" eller "lite vilt"' value="${savedText}">
-      <button class="btn btn-search" id="vibeAnalyzeBtn" type="button">Analysera</button>
+      <input type="text" class="text-input" id="vibeInput" placeholder='T.ex. "chill utan stress" eller "mat och bar"' value="${savedText}">
+      <button class="btn btn-search" id="vibeAnalyzeBtn" type="button">Hitta matchningar</button>
     </div>
     <p class="loc-status" id="vibeStatus">${state.vibeSource==='custom' ? vibeCustomStatusText(state.customVibeText, state.vibeTags) : ''}</p>
     <div class="spacer"></div>
-    <button class="btn btn-primary" id="nextBtn" ${state.vibeTags && state.vibeTags.length ? '' : 'disabled'}>${buttonLabel}</button>
+    <button class="btn btn-primary" id="nextBtn" ${hasVibeSelection(state) ? '' : 'disabled'}>${buttonLabel}</button>
   `;
 
   const list = document.getElementById('vibeList');
@@ -1213,31 +1274,43 @@ function renderVibe(){
     }
   });
 
-  function runAnalysis(){
+  // Tolkar fritexten och går direkt vidare till matchningen — man ska inte
+  // behöva klicka en gång till på knappen längre ner. Analysen blockerar
+  // aldrig: hittas inga kända nyckelord (t.ex. helt fritt formulerad text)
+  // sparas texten ändå och vi går vidare med en neutral profil, precis som
+  // ett resonerande verktyg skulle göra en bästa gissning istället för att
+  // ge upp.
+  function runAnalysisAndSearch(){
     const text = input.value.trim();
-    if(!text) return;
+    if(!text){ input.focus(); return; }
     const analysis = analyzeVibeText(text);
-    list.querySelectorAll('.choice').forEach(c => c.classList.remove('selected'));
     state.vibeSource = 'custom';
     state.vibeId = null;
     state.customVibeText = text;
     state.vibeLabel = text;
     state.vibeTags = analysis.tags;
     state.adventure = analysis.adventure;
-    statusEl.classList.remove('err');
-    statusEl.textContent = vibeCustomStatusText(text, analysis.tags);
-    nextBtn.disabled = false;
+    state.step++;
+    render();
   }
 
-  document.getElementById('vibeAnalyzeBtn').addEventListener('click', runAnalysis);
-  input.addEventListener('keydown', (e) => { if(e.key === 'Enter'){ e.preventDefault(); runAnalysis(); } });
+  document.getElementById('vibeAnalyzeBtn').addEventListener('click', runAnalysisAndSearch);
+  input.addEventListener('keydown', (e) => { if(e.key === 'Enter'){ e.preventDefault(); runAnalysisAndSearch(); } });
   nextBtn.addEventListener('click', () => { state.step++; render(); });
+}
+
+// Om det finns ett giltigt val att gå vidare med — antingen en vald preset,
+// eller egen text som sparats (oavsett om analysen hittade några nyckenord
+// eller inte). Att kräva träffade nyckelord här var buggen som gjorde att
+// knappen förblev inaktiv för fritext som inte kändes igen.
+function hasVibeSelection(state){
+  return state.vibeSource === 'preset' || (state.vibeSource === 'custom' && !!state.customVibeText);
 }
 
 function vibeCustomStatusText(text, tags){
   return tags && tags.length
     ? `Er vibe: "${text}" — vi väger in ${tags.join(", ")}.`
-    : `Er vibe: "${text}" — inga tydliga nyckelord hittades, men vi sparar den ändå.`;
+    : `Er vibe: "${text}" — inga tydliga nyckelord hittades, men vi sparar den och söker ändå.`;
 }
 
 // Delas av alla lägen — bara meddelandena och matchningsfunktionen skiljer.
@@ -1337,7 +1410,7 @@ function renderResults(matches){
       <div class="result-why">${reasonFor(p, state)}</div>
       <div class="chips">${p.tags.map((t,i) => `<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
       ${ratingRow(p)}
-      <div class="maps-hint">Öppna i Google Maps ↗</div>
+      <div class="maps-hint">📍 Öppna i Google Maps ↗</div>
     `;
     const openInMaps = () => window.open(mapsUrlFor(p), '_blank', 'noopener');
     card.addEventListener('click', (e) => { if(e.target.closest('[data-fav]')) return; openInMaps(); });
@@ -1535,7 +1608,7 @@ function renderEveningPlan(plan){
         <div class="result-why">${reasonFor(p, state)}</div>
         <div class="chips">${p.tags.map((t,i)=>`<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
         ${ratingRow(p)}
-        <div class="maps-hint">Öppna i Google Maps ↗</div>
+        <div class="maps-hint">📍 Öppna i Google Maps ↗</div>
       </div>
     `;
     const content = row.querySelector('.timeline-content');
