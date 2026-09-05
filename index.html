@@ -173,6 +173,17 @@
   .chip{ font-size:11px; font-weight:600; padding:4px 9px; border-radius:100px; border:1px solid var(--line); color: var(--muted); }
   .chip.mint{ color: var(--mint); border-color: rgba(127,191,160,0.4); }
 
+  .result-card.clickable, .timeline-content.clickable{ cursor:pointer; transition: border-color .15s ease, transform .15s ease; }
+  .result-card.clickable:hover, .result-card.clickable:focus-visible{ border-color: var(--accent-2); }
+  .result-card.clickable:active{ transform: scale(0.99); }
+  .timeline-content.clickable:hover .maps-hint, .timeline-content.clickable:focus-visible .maps-hint,
+  .result-card.clickable:hover .maps-hint, .result-card.clickable:focus-visible .maps-hint{ color: var(--accent-2); }
+  .maps-hint{
+    display:flex; align-items:center; gap:5px;
+    font-size:11px; font-weight:700; color: var(--muted);
+    margin-top:12px; text-transform:uppercase; letter-spacing:0.4px;
+  }
+
   .loading-wrap{ display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; gap:18px; }
   .scan{ width:70px;height:70px; border-radius:50%; border:3px solid var(--line); border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
   @keyframes spin{ to{ transform:rotate(360deg);} }
@@ -408,7 +419,7 @@ const PlacesProvider = (() => {
         // som platsens huvudkategori. Vi hämtar "primaryType" separat
         // eftersom det är fältet Google faktiskt avsett för kategorisering
         // (se kommentar vid tidigare bugg i guessSlot/capitalizeType nedan).
-        "X-Goog-FieldMask": "places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount"
+        "X-Goog-FieldMask": "places.id,places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount"
       },
       body: JSON.stringify(body)
     });
@@ -436,7 +447,8 @@ const PlacesProvider = (() => {
         rating: typeof p.rating === "number" ? p.rating : null,
         reviews: p.userRatingCount || 0,
         lat: p.location.latitude,
-        lng: p.location.longitude
+        lng: p.location.longitude,
+        placeId: p.id || null
       };
     });
   }
@@ -541,13 +553,39 @@ function ratingRow(p){
   </div>`;
 }
 
+// Bygger en Google Maps-länk för ett förslag, så hela kortet kan klickas
+// för att öppna just det stället. Live-data har koordinater + place_id
+// (ger en exakt träff); mock-data har ingen av delarna, så då faller vi
+// tillbaka på en textsökning på namn + typ.
+function mapsUrlFor(p){
+  if(typeof p.lat === "number" && typeof p.lng === "number"){
+    let url = `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent(p.lat + "," + p.lng)}`;
+    if(p.placeId) url += `&query_place_id=${encodeURIComponent(p.placeId)}`;
+    return url;
+  }
+  return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([p.name, p.type].filter(Boolean).join(" "))}`;
+}
+
 function reasonFor(p, state){
   const parts = [];
   parts.push(Math.abs(p.price-state.budget)===0 ? "träffar er budget rakt av" : "ligger nära er budget");
   parts.push(p.dist<=state.radius ? `bara ${p.dist.toFixed(1)} km bort` : `${p.dist.toFixed(1)} km bort, strax utanför er radie`);
   parts.push(Math.abs(p.adv-state.adventure)<=1 ? "matchar hur äventyrliga ni är" : "sticker lite ut från er profil");
   const traitPart = p.trait ? ` Känt för ${p.trait}.` : "";
-  return `${parts[0].charAt(0).toUpperCase()+parts[0].slice(1)}, ${parts[1]} och ${parts[2]}.${traitPart}`;
+  const vibeHits = state.vibeTags && state.vibeTags.length ? p.tags.filter(t => state.vibeTags.includes(t)) : [];
+  const vibePart = vibeHits.length ? ` Matchar er vibe (${vibeHits.join(", ")}).` : "";
+  return `${parts[0].charAt(0).toUpperCase()+parts[0].slice(1)}, ${parts[1]} och ${parts[2]}.${traitPart}${vibePart}`;
+}
+
+// Ger bonuspoäng mot förslag som matchar den vibe gänget valt (eller den
+// AI-tolkade egna vibe-texten) i steg 4 — ovanpå den vanliga scorePlace().
+// Fungerar precis som tagBonus/DATE_BONUS_TAGS/CHILL_BONUS_TAGS men styrs
+// av vad användaren faktiskt valde i vibe-steget istället för att vara
+// hårdkodat per läge.
+function scoreWithVibe(p, state, vibeWeight = 0.25){
+  const base = scorePlace(p, state);
+  if(!state.vibeTags || !state.vibeTags.length) return base;
+  return base * (1 - vibeWeight) + tagBonus(p, state.vibeTags) * vibeWeight;
 }
 
 async function computeMatches(state){
@@ -569,7 +607,7 @@ async function computeMatches(state){
   }
 
   return candidates
-    .map(p => ({ ...p, score: scorePlace(p, state) }))
+    .map(p => ({ ...p, score: scoreWithVibe(p, state) }))
     .sort((a,b) => b.score - a.score)
     .slice(0, 3);
 }
@@ -584,7 +622,11 @@ const state = {
   people: [],                         // "Med vänner": tillagda personer
   groupDraft: { budget: null, adventure: null }, // "Med vänner": person som håller på att läggas till
   groupSize: 0,
-  showFavorites: false
+  showFavorites: false,
+  // Steg 4 · Vibe: antingen en förvald preset ("preset") eller en egen
+  // text som tolkats av analyzeVibeText() ("custom"). vibeTags används av
+  // scoreWithVibe()/tagBonus() för att vikta matchningarna.
+  vibeSource: null, vibeId: null, vibeLabel: '', vibeTags: [], customVibeText: ''
 };
 
 const el = {
@@ -683,6 +725,7 @@ function goHome(){
   state.groupDraft = { budget: null, adventure: null };
   state.groupSize = 0;
   state.showFavorites = false;
+  state.vibeSource = null; state.vibeId = null; state.vibeLabel = ''; state.vibeTags = []; state.customVibeText = '';
   el.card.style.minHeight = '380px';
   render();
 }
@@ -719,6 +762,7 @@ function switchMode(mode){
   state.people = [];
   state.groupDraft = { budget: null, adventure: null };
   state.groupSize = 0;
+  state.vibeSource = null; state.vibeId = null; state.vibeLabel = ''; state.vibeTags = []; state.customVibeText = '';
   el.card.style.minHeight = '380px';
   render();
 }
@@ -1063,19 +1107,137 @@ function renderRadius(){
   document.getElementById('nextBtn').addEventListener('click', () => { state.step++; render(); });
 }
 
-function renderAdventure(){
-  renderSingleChoiceStep({
-    eyebrow: "Steg 4 · Stämning",
-    title: "Beprövat, <em>eller nåt nytt?</em>",
-    lead: "Det avgör om vi föreslår säkra favoriter eller mer oprövade pärlor.",
-    field: "adventure",
-    buttonLabel: state.mode === 'tonight' ? "Planera kvällen" : (state.mode === 'date' ? "Hitta dejtställen" : "Hitta matchningar"),
-    options: [
-      {v:1,l:"Hellre säkert", d:"Nåt vi vet att vi gillar"},
-      {v:3,l:"Gärna lite nytt", d:"Inom rimliga gränser"},
-      {v:5,l:"Överraska oss", d:"Ta gärna en chansning"}
-    ]
+/* =========================================================================
+   STEG 4 · VIBE
+   Ersätter det gamla "äventyrsreglaget" med ett val av sällskapets vibe:
+   antingen en av några färdiga stämningar, eller en egen text som tolkas
+   lokalt (analyzeVibeText) till samma taggar/äventyrsnivå som resten av
+   matchningslogiken redan förstår sig på. Ingen extern AI-tjänst anropas
+   här (appen har ingen backend att göra det ifrån) — "analysen" är en
+   nyckelordsbaserad tolkning byggd på samma tagg-vokabulär som redan
+   används för Dejt/Fikapaus (DATE_BONUS_TAGS/CHILL_BONUS_TAGS). Om ni
+   senare vill koppla på en riktig språkmodell för tolkningen är det bara
+   analyzeVibeText() som behöver bytas ut — allt annat (scoreWithVibe,
+   reasonFor, UI) bygger redan på taggarna den returnerar.
+   ========================================================================= */
+const VIBE_PRESETS = [
+  { id:"cozy",        label:"Mysigt & lugnt",     desc:"Nära samtal, skön stämning",   tags:["Mysigt","Lugnt","Avslappnat","Bra för samtal"], adventure:2 },
+  { id:"social",      label:"Socialt & livligt",  desc:"Mycket folk, hög energi",      tags:["Livlig stämning","Socialt","Högt i tak"],       adventure:4 },
+  { id:"romantic",    label:"Romantiskt",         desc:"Perfekt för två",              tags:["Romantiskt","Datevänligt","Utsikt"],            adventure:3 },
+  { id:"adventurous", label:"Äventyrligt & nytt", desc:"Överraska oss gärna",          tags:["Äventyrligt","Hemlig entré"],                   adventure:5 }
+];
+
+// Nyckelord → taggar/äventyrsnivå. Samma tagg-vokabulär som MOCK_PLACES och
+// typLabels från Google Places redan använder, så en egen vibe viktar
+// matchningarna på precis samma sätt som en förvald preset gör.
+const VIBE_KEYWORDS = [
+  { words:["mysig","mys","chill","skön","hemtrevlig"],               tags:["Mysigt","Avslappnat"],             adventure:2 },
+  { words:["lugn","stress","vila","andas ut","harmoni"],             tags:["Lugnt","Avslappnat"],               adventure:1 },
+  { words:["prat","samtal","snack","djup","kvalitetstid"],           tags:["Bra för samtal","Mysigt"],          adventure:2 },
+  { words:["romantis","dejt","kärlek","candlelight","tvåsamhet"],    tags:["Romantiskt","Datevänligt"],         adventure:3 },
+  { words:["fest","party","dans","pumpa","högt tempo"],              tags:["Livlig stämning","Socialt"],        adventure:4 },
+  { words:["socialt","folk","umgås","gäng","högt i tak"],            tags:["Socialt","Livlig stämning","Högt i tak"], adventure:3 },
+  { words:["vilt","galet","äventyr","spontan","oväntat","nytt"],     tags:["Äventyrligt"],                      adventure:5 },
+  { words:["hemlig","dold","speakeasy","exklusiv"],                  tags:["Hemlig entré","Äventyrligt"],       adventure:5 },
+  { words:["utsikt","tak","panorama","högt upp"],                    tags:["Utsikt"],                           adventure:3 },
+  { words:["hav","vatten","hamn","sjö","strand"],                    tags:["Havsnära"],                         adventure:2 },
+  { words:["billigt","prisvärt","student","spara","budget"],         tags:["Prisvärt"],                         adventure:2 },
+  { words:["hälsosam","vegetarisk","vegan","grönt","clean"],         tags:["Hälsosamt"],                        adventure:2 }
+];
+
+function analyzeVibeText(text){
+  const lower = text.toLowerCase();
+  const tags = new Set();
+  let advSum = 0, advHits = 0;
+  VIBE_KEYWORDS.forEach(k => {
+    if(k.words.some(w => lower.includes(w))){
+      k.tags.forEach(t => tags.add(t));
+      advSum += k.adventure; advHits++;
+    }
   });
+  return {
+    tags: Array.from(tags),
+    adventure: advHits ? Math.min(5, Math.max(1, Math.round(advSum / advHits))) : 3
+  };
+}
+
+function renderVibe(){
+  const buttonLabel = state.mode === 'tonight' ? "Planera kvällen" : (state.mode === 'date' ? "Hitta dejtställen" : "Hitta matchningar");
+  const savedText = state.customVibeText ? state.customVibeText.replace(/"/g, '&quot;') : '';
+
+  el.card.innerHTML = `
+    <div class="eyebrow">Steg 4 · Vibe</div>
+    <h1>Vilken <em>vibe</em> vill ni ha?</h1>
+    <p class="lead">Välj sällskapets stämning för ikväll — eller skriv er egen så tolkar vi den och väger in den i sökningen.</p>
+    <div class="choices" id="vibeList">
+      ${VIBE_PRESETS.map(v => `
+        <div class="choice${state.vibeSource==='preset' && state.vibeId===v.id ? ' selected':''}" tabindex="0" role="button" data-id="${v.id}">
+          <span>${v.label}</span><span class="tag">${v.desc}</span>
+        </div>`).join('')}
+    </div>
+    <div class="loc-or">eller skriv er egen</div>
+    <div class="loc-search-row">
+      <input type="text" class="text-input" id="vibeInput" placeholder='T.ex. "chill utan stress" eller "lite vilt"' value="${savedText}">
+      <button class="btn btn-search" id="vibeAnalyzeBtn" type="button">Analysera</button>
+    </div>
+    <p class="loc-status" id="vibeStatus">${state.vibeSource==='custom' ? vibeCustomStatusText(state.customVibeText, state.vibeTags) : ''}</p>
+    <div class="spacer"></div>
+    <button class="btn btn-primary" id="nextBtn" ${state.vibeTags && state.vibeTags.length ? '' : 'disabled'}>${buttonLabel}</button>
+  `;
+
+  const list = document.getElementById('vibeList');
+  const input = document.getElementById('vibeInput');
+  const statusEl = document.getElementById('vibeStatus');
+  const nextBtn = document.getElementById('nextBtn');
+
+  function selectPreset(target){
+    list.querySelectorAll('.choice').forEach(c => c.classList.remove('selected'));
+    target.classList.add('selected');
+    const preset = VIBE_PRESETS.find(v => v.id === target.dataset.id);
+    state.vibeSource = 'preset';
+    state.vibeId = preset.id;
+    state.vibeLabel = preset.label;
+    state.vibeTags = preset.tags;
+    state.adventure = preset.adventure;
+    state.customVibeText = '';
+    input.value = '';
+    statusEl.classList.remove('err');
+    statusEl.textContent = '';
+    nextBtn.disabled = false;
+  }
+
+  list.addEventListener('click', (e) => { const t = e.target.closest('.choice'); if(t) selectPreset(t); });
+  list.addEventListener('keydown', (e) => {
+    if((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('choice')){
+      e.preventDefault(); selectPreset(e.target);
+    }
+  });
+
+  function runAnalysis(){
+    const text = input.value.trim();
+    if(!text) return;
+    const analysis = analyzeVibeText(text);
+    list.querySelectorAll('.choice').forEach(c => c.classList.remove('selected'));
+    state.vibeSource = 'custom';
+    state.vibeId = null;
+    state.customVibeText = text;
+    state.vibeLabel = text;
+    state.vibeTags = analysis.tags;
+    state.adventure = analysis.adventure;
+    statusEl.classList.remove('err');
+    statusEl.textContent = vibeCustomStatusText(text, analysis.tags);
+    nextBtn.disabled = false;
+  }
+
+  document.getElementById('vibeAnalyzeBtn').addEventListener('click', runAnalysis);
+  input.addEventListener('keydown', (e) => { if(e.key === 'Enter'){ e.preventDefault(); runAnalysis(); } });
+  nextBtn.addEventListener('click', () => { state.step++; render(); });
+}
+
+function vibeCustomStatusText(text, tags){
+  return tags && tags.length
+    ? `Er vibe: "${text}" — vi väger in ${tags.join(", ")}.`
+    : `Er vibe: "${text}" — inga tydliga nyckelord hittades, men vi sparar den ändå.`;
 }
 
 // Delas av alla lägen — bara meddelandena och matchningsfunktionen skiljer.
@@ -1141,7 +1303,7 @@ function renderResults(matches){
   }
 
   const modeLead = {
-    now: "Baserat på budget, avstånd och äventyrslust — här är vad matchymatchy hittade åt er.",
+    now: "Baserat på budget, avstånd och er vibe — här är vad matchymatchy hittade åt er.",
     spontaneous: "Vi slumpade fram budget, sträcka och stämning å era vägnar — här är vad vi hittade.",
     group: `Vi vägde ihop smaken hos ${state.groupSize || 1} ${state.groupSize === 1 ? 'person' : 'personer'} och hittade det här.`,
     date: "Vi viktade upp mysiga, romantiska ställen — här är vad som passade bäst för er två.",
@@ -1157,7 +1319,10 @@ function renderResults(matches){
   matches.forEach(p => {
     const pct = Math.round(60 + p.score * 38);
     const card = document.createElement('div');
-    card.className = 'result-card';
+    card.className = 'result-card clickable';
+    card.tabIndex = 0;
+    card.setAttribute('role', 'link');
+    card.setAttribute('aria-label', `Öppna ${p.name} i Google Maps`);
     card.innerHTML = `
       <div class="result-top">
         <div>
@@ -1172,12 +1337,21 @@ function renderResults(matches){
       <div class="result-why">${reasonFor(p, state)}</div>
       <div class="chips">${p.tags.map((t,i) => `<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
       ${ratingRow(p)}
+      <div class="maps-hint">Öppna i Google Maps ↗</div>
     `;
+    const openInMaps = () => window.open(mapsUrlFor(p), '_blank', 'noopener');
+    card.addEventListener('click', (e) => { if(e.target.closest('[data-fav]')) return; openInMaps(); });
+    card.addEventListener('keydown', (e) => {
+      if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-fav]')){
+        e.preventDefault(); openInMaps();
+      }
+    });
     frag.appendChild(card);
   });
   el.card.appendChild(frag);
   el.card.querySelectorAll('[data-fav]').forEach(btn => {
-    btn.addEventListener('click', () => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
       const place = matches.find(m => m.name === btn.dataset.fav);
       const added = toggleFavorite(place);
       btn.classList.toggle('active', added);
@@ -1313,7 +1487,7 @@ async function computeEveningPlan(state){
   });
   const bestInSlot = (slot) => places
     .filter(p => p.slot === slot)
-    .map(p => ({ ...p, score: scorePlace(p, state) }))
+    .map(p => ({ ...p, score: scoreWithVibe(p, state) }))
     .sort((a,b) => b.score - a.score)[0] || null;
 
   return {
@@ -1354,15 +1528,22 @@ function renderEveningPlan(plan){
     row.className = 'timeline-item';
     row.innerHTML = `
       <div class="timeline-track"><div class="timeline-dot"></div><div class="timeline-line"></div></div>
-      <div class="timeline-content">
+      <div class="timeline-content clickable" tabindex="0" role="link" aria-label="Öppna ${p.name} i Google Maps">
         <div class="timeline-time">${item.time} · ${item.label}</div>
         <div class="result-name">${p.name}</div>
         <div class="result-type">${p.type}</div>
         <div class="result-why">${reasonFor(p, state)}</div>
         <div class="chips">${p.tags.map((t,i)=>`<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
         ${ratingRow(p)}
+        <div class="maps-hint">Öppna i Google Maps ↗</div>
       </div>
     `;
+    const content = row.querySelector('.timeline-content');
+    const openInMaps = () => window.open(mapsUrlFor(p), '_blank', 'noopener');
+    content.addEventListener('click', openInMaps);
+    content.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openInMaps(); }
+    });
     wrap.appendChild(row);
   });
 
@@ -1385,8 +1566,9 @@ async function computeDateMatches(state){
   const places = await PlacesProvider.getPlaces({
     coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
   });
+  const bonusTags = [...DATE_BONUS_TAGS, ...(state.vibeTags || [])];
   return places
-    .map(p => ({ ...p, score: scorePlace(p, state) * 0.75 + tagBonus(p, DATE_BONUS_TAGS) * 0.25 }))
+    .map(p => ({ ...p, score: scorePlace(p, state) * 0.75 + tagBonus(p, bonusTags) * 0.25 }))
     .sort((a,b) => b.score - a.score)
     .slice(0, 3);
 }
@@ -1431,8 +1613,9 @@ async function computeFikaMatches(state){
   const places = await PlacesProvider.getPlaces({
     coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
   });
+  const bonusTags = [...CHILL_BONUS_TAGS, ...(state.vibeTags || [])];
   return places
-    .map(p => ({ ...p, score: scorePlace(p, state) * 0.7 + tagBonus(p, CHILL_BONUS_TAGS) * 0.3 }))
+    .map(p => ({ ...p, score: scorePlace(p, state) * 0.7 + tagBonus(p, bonusTags) * 0.3 }))
     .sort((a,b) => b.score - a.score)
     .slice(0, 3);
 }
@@ -1446,18 +1629,18 @@ async function computeFikaMatches(state){
    ========================================================================= */
 FLOWS = {
   now: {
-    steps: [renderLocation, renderBudget, renderRadius, renderAdventure],
+    steps: [renderLocation, renderBudget, renderRadius, renderVibe],
     matcher: computeMatches,
     resultRenderer: renderResults,
     loadingMessages: (s) => [
       `Analyserar platser inom ${formatKm(s.radius)}…`,
       "Jämför med er budget…",
-      "Väger in äventyrsfaktorn…",
+      "Väger in er vibe…",
       "Rankar bästa matchningarna…"
     ]
   },
   tonight: {
-    steps: [renderLocation, renderBudget, renderRadius, renderAdventure],
+    steps: [renderLocation, renderBudget, renderRadius, renderVibe],
     matcher: computeEveningPlan,
     resultRenderer: renderEveningPlan,
     loadingEyebrow: "Planerar",
@@ -1483,13 +1666,13 @@ FLOWS = {
     loadingMessages: () => ["Väger ihop allas önskemål…", "Hittar en kompromiss alla gillar…", "Rankar bästa matchningarna…"]
   },
   date: {
-    steps: [renderLocation, renderBudget, renderRadius, renderAdventure],
+    steps: [renderLocation, renderBudget, renderRadius, renderVibe],
     matcher: computeDateMatches,
     resultRenderer: renderResults,
     loadingMessages: (s) => [
       `Analyserar platser inom ${formatKm(s.radius)}…`,
       "Letar efter mysiga hörn…",
-      "Väger in stämningen…",
+      "Väger in er vibe…",
       "Rankar bästa dejtställena…"
     ]
   },
