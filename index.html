@@ -3,7 +3,13 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>matchymatchy</title>
+<title>matchymatchy — hitta något att göra ikväll</title>
+<meta name="description" content="Svara på några snabba frågor om budget, avstånd och stämning — matchymatchy scannar omgivningen och föreslår ställen som passar er, med en motivering till varje förslag.">
+<meta name="theme-color" content="#241220">
+<link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%23241220'/%3E%3Ccircle cx='50' cy='50' r='46' fill='none' stroke='%23ffc857' stroke-width='4'/%3E%3Ctext x='50' y='66' font-size='54' text-anchor='middle' fill='%23ff6b5b'%3E%E2%9D%A4%3C/text%3E%3C/svg%3E">
+<meta property="og:title" content="matchymatchy">
+<meta property="og:description" content="Sluta bläddra, börja matcha — hitta något att göra ikväll utan att leta själva.">
+<meta property="og:type" content="website">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500;1,9..144,600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
@@ -344,7 +350,7 @@ const PlacesProvider = (() => {
       dist: haversineKm(criteria.coords, { lat: p.location.latitude, lng: p.location.longitude }),
       adv: 3, // Google har ingen "äventyrsnivå" — härled från types/rating vid behov
       tags: (p.types && p.types[0]) ? [capitalizeType(p.types[0])] : [],
-      trait: "",
+      trait: liveTrait(p),
       slot: guessSlot(p.types || []),
       rating: typeof p.rating === "number" ? p.rating : null,
       reviews: p.userRatingCount || 0,
@@ -361,6 +367,19 @@ const PlacesProvider = (() => {
   function capitalizeType(type){
     const t = type.replaceAll("_"," ");
     return t.charAt(0).toUpperCase() + t.slice(1);
+  }
+
+  // Google skickar ingen färdig "känt för"-text, så vi bygger en kort
+  // rad av det vi faktiskt har (betyg + antal recensioner) istället för
+  // att lämna motiveringen tom för riktiga platser.
+  function liveTrait(p){
+    if(typeof p.rating === "number" && p.userRatingCount){
+      return `ett snittbetyg på ${p.rating.toFixed(1)} från ${p.userRatingCount} recensioner`;
+    }
+    if(typeof p.rating === "number"){
+      return `ett snittbetyg på ${p.rating.toFixed(1)} på Google`;
+    }
+    return "";
   }
 
   // "Ikväll"-läget (förfest/middag/efterfest) bygger på ett "slot"-fält som
