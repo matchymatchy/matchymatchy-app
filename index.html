@@ -365,6 +365,10 @@ const PlacesProvider = (() => {
 
     const body = {
       includedTypes: ["restaurant", "bar", "cafe"],
+      // Snabbmatskedjor (McDonald's, KFC m.fl.) klassas av Google som just
+      // dessa typer — utesluts helt här så de aldrig kan dyka upp som förslag,
+      // oavsett vad poängsättningen längre ner skulle landa i.
+      excludedPrimaryTypes: ["fast_food_restaurant", "meal_takeaway", "meal_delivery"],
       maxResultCount: 20,
       locationRestriction: {
         circle: {
@@ -380,7 +384,11 @@ const PlacesProvider = (() => {
         "Content-Type": "application/json",
         "X-Goog-Api-Key": CONFIG.GOOGLE_MAPS_API_KEY,
         // FieldMask styr vad ni betalar för — håll den snäv.
-        "X-Goog-FieldMask": "places.displayName,places.priceLevel,places.location,places.types,places.rating,places.userRatingCount"
+        // OBS: "places.types" är en oordnad lista — det är INTE samma sak
+        // som platsens huvudkategori. Vi hämtar "primaryType" separat
+        // eftersom det är fältet Google faktiskt avsett för kategorisering
+        // (se kommentar vid tidigare bugg i guessSlot/capitalizeType nedan).
+        "X-Goog-FieldMask": "places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount"
       },
       body: JSON.stringify(body)
     });
@@ -389,24 +397,35 @@ const PlacesProvider = (() => {
     const data = await res.json();
 
     // Mappa Google-formatet till appens interna plats-form.
-    return (data.places || []).map(p => ({
-      name: p.displayName?.text || "Okänt ställe",
-      type: (p.types && p.types[0]) ? p.types[0].replaceAll("_"," ") : "",
-      price: mapGooglePriceLevel(p.priceLevel),
-      dist: haversineKm(criteria.coords, { lat: p.location.latitude, lng: p.location.longitude }),
-      adv: 3, // Google har ingen "äventyrsnivå" — härled från types/rating vid behov
-      tags: (p.types && p.types[0]) ? [capitalizeType(p.types[0])] : [],
-      trait: liveTrait(p),
-      slot: guessSlot(p.types || []),
-      rating: typeof p.rating === "number" ? p.rating : null,
-      reviews: p.userRatingCount || 0,
-      lat: p.location.latitude,
-      lng: p.location.longitude
-    }));
+    return (data.places || []).map(p => {
+      // primaryType/primaryTypeDisplayName är Googles egna, avsedda fält för
+      // "vad är det här stället egentligen" — till skillnad från "types",
+      // som är en oordnad lista och INTE ska tolkas som types[0] = huvudtyp.
+      // (Det var den bakomliggande buggen till att t.ex. snabbmatsställen
+      // kunde hamna i fel kategori/tidslucka tidigare.)
+      const typeLabel = p.primaryTypeDisplayName?.text || (p.primaryType ? capitalizeType(p.primaryType) : "");
+      return {
+        name: p.displayName?.text || "Okänt ställe",
+        type: typeLabel,
+        price: mapGooglePriceLevel(p.priceLevel),
+        dist: haversineKm(criteria.coords, { lat: p.location.latitude, lng: p.location.longitude }),
+        adv: 3, // Google har ingen "äventyrsnivå" — härled från types/rating vid behov
+        tags: typeLabel ? [typeLabel] : [],
+        trait: liveTrait(p),
+        slot: guessSlot(p.primaryType),
+        rating: typeof p.rating === "number" ? p.rating : null,
+        reviews: p.userRatingCount || 0,
+        lat: p.location.latitude,
+        lng: p.location.longitude
+      };
+    });
   }
 
   function mapGooglePriceLevel(level){
-    const map = { PRICE_LEVEL_INEXPENSIVE:1, PRICE_LEVEL_MODERATE:2, PRICE_LEVEL_EXPENSIVE:3, PRICE_LEVEL_VERY_EXPENSIVE:3 };
+    // Fyra egna nivåer, en per Google-nivå — ingen ihopslagning längre.
+    // Tidigare hamnade "dyrt" och "väldigt dyrt" i samma bucket (3), vilket
+    // gjorde att budgetreglaget inte gick att lita på i den övre delen.
+    const map = { PRICE_LEVEL_FREE:1, PRICE_LEVEL_INEXPENSIVE:1, PRICE_LEVEL_MODERATE:2, PRICE_LEVEL_EXPENSIVE:3, PRICE_LEVEL_VERY_EXPENSIVE:4 };
     return map[level] || 2;
   }
 
@@ -431,9 +450,9 @@ const PlacesProvider = (() => {
   // "Ikväll"-läget (förfest/middag/efterfest) bygger på ett "slot"-fält som
   // Google inte har — vi gissar det grovt utifrån platstypen så det läget
   // fortsätter fungera med riktig data också.
-  function guessSlot(types){
-    if(types.some(t => ["cafe","bakery"].includes(t))) return "early";
-    if(types.some(t => ["bar","night_club"].includes(t))) return "late";
+  function guessSlot(primaryType){
+    if(["cafe","bakery"].includes(primaryType)) return "early";
+    if(["bar","night_club","pub","wine_bar"].includes(primaryType)) return "late";
     return "main";
   }
 
@@ -459,7 +478,7 @@ const PlacesProvider = (() => {
    Oberoende av var platserna kom ifrån (mock eller live).
    ========================================================================= */
 function scorePlace(p, state){
-  const priceScore = 1 - (Math.abs(p.price - state.budget) / 2);
+  const priceScore = 1 - (Math.abs(p.price - state.budget) / 3);
   const distScore = p.dist <= state.radius ? 1 : Math.max(0, 1 - ((p.dist - state.radius) / 2));
   const advScore = 1 - (Math.abs(p.adv - state.adventure) / 4);
   return priceScore*0.4 + distScore*0.35 + advScore*0.25;
@@ -526,7 +545,7 @@ async function computeMatches(state){
   if(isOpenEndedLow(state.budgetAmount)){
     candidates = places.filter(p => p.price === 1);
   } else if(isOpenEndedHigh(state.budgetAmount)){
-    candidates = places.filter(p => p.price === 3);
+    candidates = places.filter(p => p.price === 4);
   }
 
   return candidates
@@ -834,33 +853,37 @@ function renderSingleChoiceStep({ eyebrow, title, lead, options, field, buttonLa
   nextBtn.addEventListener('click', () => { state.step++; render(); });
 }
 
-const BUDGET_MIN = 100;
-const BUDGET_MAX = 2000;
+// Snävare, verklighetsförankrat spann (50–1000 kr istället för 100–2000 kr)
+// och brytpunkter som matchar Googles fyra prisnivåer rakt av — samma
+// indelning som mapGooglePriceLevel() använder. Det gör att det spannet
+// man drar in på faktiskt är det spannet förslagen hämtas ur, istället för
+// att reglaget bara delade in i tredjedelar oavsett vad Google kallar dyrt.
+const BUDGET_MIN = 50;
+const BUDGET_MAX = 1000;
+const BUDGET_BREAKPOINTS = [150, 350, 700]; // <150=nivå1, 150–350=nivå2, 350–700=nivå3, >700=nivå4
 
 function amountToTier(amount){
-  if(amount <= BUDGET_MIN) return 1;
-  if(amount >= BUDGET_MAX) return 3;
-  const range = BUDGET_MAX - BUDGET_MIN;
-  if(amount < BUDGET_MIN + range/3) return 1;
-  if(amount < BUDGET_MIN + (range*2)/3) return 2;
-  return 3;
+  if(amount < BUDGET_BREAKPOINTS[0]) return 1;
+  if(amount < BUDGET_BREAKPOINTS[1]) return 2;
+  if(amount < BUDGET_BREAKPOINTS[2]) return 3;
+  return 4;
 }
 
-// Vid reglagets ändlägen är det öppna intervall ("under 100 kr" / "över
-// 2000 kr") snarare än en exakt nivå — det hanteras separat i computeMatches.
+// Vid reglagets ändlägen är det öppna intervall ("under 50 kr" / "över
+// 1000 kr") snarare än en exakt nivå — det hanteras separat i computeMatches.
 function isOpenEndedLow(amount){ return amount <= BUDGET_MIN; }
 function isOpenEndedHigh(amount){ return amount >= BUDGET_MAX; }
 
 function budgetValueLabel(amount){
-  if(isOpenEndedLow(amount)) return "Under 100 kr";
-  if(isOpenEndedHigh(amount)) return "Över 2000 kr";
+  if(isOpenEndedLow(amount)) return "Under 50 kr";
+  if(isOpenEndedHigh(amount)) return "Över 1000 kr";
   return amount + " kr";
 }
 
 function budgetNote(amount){
-  if(isOpenEndedLow(amount)) return "Visar bara ställen under 100 kr";
-  if(isOpenEndedHigh(amount)) return "Visar bara ställen över 2000 kr";
-  const labels = { 1:"€ · Fika-läge, prisvärt", 2:"€€ · Vardagslyx", 3:"€€€ · Vi unnar oss" };
+  if(isOpenEndedLow(amount)) return "Visar bara ställen under 50 kr";
+  if(isOpenEndedHigh(amount)) return "Visar bara ställen över 700 kr";
+  const labels = { 1:"€ · Prisvärt, under 150 kr", 2:"€€ · Vardagslyx, 150–350 kr", 3:"€€€ · Lite finare, 350–700 kr", 4:"€€€€ · Vi unnar oss, över 700 kr" };
   return labels[amountToTier(amount)];
 }
 
@@ -868,9 +891,9 @@ function renderBudget(){
   el.card.innerHTML = `
     <div class="eyebrow">Steg 2 · Budget</div>
     <h1>Vad är er <em>budget</em>?</h1>
-    <p class="lead">Dra i reglaget för ungefär hur mycket ni vill lägga per person. Dra hela vägen till en kant för att bara se ställen under 100 kr eller över 2000 kr.</p>
+    <p class="lead">Dra i reglaget för ungefär hur mycket ni vill lägga per person. Dra hela vägen till en kant för att bara se ställen under 50 kr eller över 1000 kr.</p>
     <input type="range" min="${BUDGET_MIN}" max="${BUDGET_MAX}" step="10" value="${state.budgetAmount}" id="budgetRange" aria-label="Budget per person i kronor">
-    <div class="range-val"><span>Under 100</span><b id="budgetVal">${budgetValueLabel(state.budgetAmount)}</b><span>Över 2000</span></div>
+    <div class="range-val"><span>Under 50</span><b id="budgetVal">${budgetValueLabel(state.budgetAmount)}</b><span>Över 1000</span></div>
     <p class="loc-status" id="budgetTier">${budgetNote(state.budgetAmount)}</p>
     <div class="spacer"></div>
     <button class="btn btn-primary" id="nextBtn">Nästa</button>
@@ -1055,8 +1078,8 @@ function renderSpontaneousIntro(){
 }
 
 async function computeSpontaneousMatches(state){
-  const budgetTiers = [1,2,3];
-  const budgetAmounts = { 1:150, 2:400, 3:1200 };
+  const budgetTiers = [1,2,3,4];
+  const budgetAmounts = { 1:100, 2:250, 3:500, 4:900 };
   const radii = [1, 1.5, 2, 3, 4];
   const adventures = [1, 3, 5];
 
@@ -1080,7 +1103,7 @@ function peopleRowHtml(p, i){
     <span class="remove" data-remove="${i}">Ta bort</span>
   </div>`;
 }
-function budgetLabelShort(v){ return {1:"€",2:"€€",3:"€€€"}[v] || "–"; }
+function budgetLabelShort(v){ return {1:"€",2:"€€",3:"€€€",4:"€€€€"}[v] || "–"; }
 function advLabelShort(v){ return {1:"Klassiskt",3:"Lagom",5:"Äventyrligt"}[v] || "–"; }
 
 function renderGroupPeople(){
@@ -1096,7 +1119,7 @@ function renderGroupPeople(){
 
     <div class="field-label">Ny person · budget</div>
     <div class="pill-row" id="draftBudget">
-      ${[{v:1,l:"€"},{v:2,l:"€€"},{v:3,l:"€€€"}].map(o=>`<div class="pill${draft.budget===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
+      ${[{v:1,l:"€"},{v:2,l:"€€"},{v:3,l:"€€€"},{v:4,l:"€€€€"}].map(o=>`<div class="pill${draft.budget===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
     </div>
     <div class="field-label">Stämning</div>
     <div class="pill-row" id="draftAdv">
@@ -1138,9 +1161,9 @@ async function computeGroupMatches(state){
   const people = state.people.length ? state.people : [{ name:"Du", budget: state.budget || 2, adventure: state.adventure || 3 }];
   const avg = (key) => people.reduce((sum,p)=>sum+p[key],0) / people.length;
 
-  state.budget = Math.min(3, Math.max(1, Math.round(avg('budget'))));
+  state.budget = Math.min(4, Math.max(1, Math.round(avg('budget'))));
   state.adventure = Math.min(5, Math.max(1, Math.round(avg('adventure'))));
-  state.budgetAmount = { 1:150, 2:400, 3:1200 }[state.budget];
+  state.budgetAmount = { 1:100, 2:250, 3:500, 4:900 }[state.budget];
   state.radius = state.radius || 3;
   state.groupSize = people.length;
   if(!state.coords) state.coords = await quickLocation();
@@ -1252,7 +1275,7 @@ function renderFikaIntro(){
     <p class="lead">En fråga, så hittar vi ett lugnt, nära ställe att andas ut på.</p>
     <div class="field-label">Budget</div>
     <div class="pill-row" id="fikaBudget">
-      ${[{v:1,l:"€"},{v:2,l:"€€"},{v:3,l:"€€€"}].map(o=>`<div class="pill${state.budget===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
+      ${[{v:1,l:"€"},{v:2,l:"€€"},{v:3,l:"€€€"},{v:4,l:"€€€€"}].map(o=>`<div class="pill${state.budget===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
     </div>
     <div class="spacer"></div>
     <button class="btn btn-primary" id="fikaNextBtn" ${state.budget ? '' : 'disabled'}>Hitta ett ställe</button>
@@ -1265,7 +1288,7 @@ function renderFikaIntro(){
     nextBtn.addEventListener('click', () => {
       state.radius = 1.5;
       state.adventure = 1;
-      state.budgetAmount = { 1:150, 2:400, 3:1200 }[state.budget];
+      state.budgetAmount = { 1:100, 2:250, 3:500, 4:900 }[state.budget];
       state.step++;
       render();
     });
