@@ -442,7 +442,7 @@ const PlacesProvider = (() => {
         // som platsens huvudkategori. Vi hämtar "primaryType" separat
         // eftersom det är fältet Google faktiskt avsett för kategorisering
         // (se kommentar vid tidigare bugg i guessSlot/capitalizeType nedan).
-        "X-Goog-FieldMask": "places.id,places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount"
+        "X-Goog-FieldMask": "places.id,places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount,places.editorialSummary,places.outdoorSeating,places.goodForGroups,places.servesVegetarianFood,places.servesBeer,places.servesWine,places.servesCocktails"
       },
       body: JSON.stringify(body)
     });
@@ -460,14 +460,20 @@ const PlacesProvider = (() => {
       // (Det var den bakomliggande buggen till att t.ex. snabbmatsställen
       // kunde hamna i fel kategori/tidslucka tidigare.)
       const typeLabel = p.primaryTypeDisplayName?.text || (p.primaryType ? capitalizeType(p.primaryType) : "");
+      const servesAlcohol = !!(p.servesBeer || p.servesWine || p.servesCocktails);
+      const extraTags = [];
+      if(servesAlcohol) extraTags.push("Alkohol");
+      if(p.servesVegetarianFood) extraTags.push("Hälsosamt");
+      if(p.outdoorSeating) extraTags.push("Utomhus");
       return {
         name: p.displayName?.text || "Okänt ställe",
         type: typeLabel,
         price: mapGooglePriceLevel(p.priceLevel),
         dist: haversineKm(criteria.coords, { lat: p.location.latitude, lng: p.location.longitude }),
         adv: 3, // Google har ingen "äventyrsnivå" — härled från types/rating vid behov
-        tags: typeLabel ? [typeLabel] : [],
-        trait: liveTrait(p),
+        tags: typeLabel ? [typeLabel, ...extraTags] : extraTags,
+        trait: liveTrait(p, typeLabel, { servesAlcohol, outdoorSeating: !!p.outdoorSeating, goodForGroups: !!p.goodForGroups }),
+        traitStandalone: true,
         slot: guessSlot(p.primaryType),
         rating: typeof p.rating === "number" ? p.rating : null,
         reviews: p.userRatingCount || 0,
@@ -515,17 +521,49 @@ const PlacesProvider = (() => {
     return t.charAt(0).toUpperCase() + t.slice(1);
   }
 
-  // Google skickar ingen färdig "känt för"-text, så vi bygger en kort
-  // rad av det vi faktiskt har (betyg + antal recensioner) istället för
-  // att lämna motiveringen tom för riktiga platser.
-  function liveTrait(p){
-    if(typeof p.rating === "number" && p.userRatingCount){
-      return `ett snittbetyg på ${p.rating.toFixed(1)} från ${p.userRatingCount} recensioner`;
+  // Google skickar inte alltid en färdig beskrivning. Om "editorialSummary"
+  // finns (en kort redaktionell text Google själva skrivit om stället) är
+  // den bästa källan — annars bygger vi en egen mening av det vi faktiskt
+  // vet (typ, stämning, betyg) istället för att bara upprepa betyget om
+  // och om igen på varje kort.
+  function liveTrait(p, typeLabel, atmosphere){
+    if(p.editorialSummary?.text){
+      const text = p.editorialSummary.text.trim();
+      return text.endsWith(".") ? text : text + ".";
     }
-    if(typeof p.rating === "number"){
-      return `ett snittbetyg på ${p.rating.toFixed(1)} på Google`;
+
+    const bits = [];
+    if(atmosphere.outdoorSeating) bits.push("uteservering");
+    if(atmosphere.servesAlcohol) bits.push("servering av alkohol");
+    if(atmosphere.goodForGroups) bits.push("bra för grupper");
+
+    const typePhrase = typeLabel ? typeLabel.toLowerCase() : "ett ställe";
+    const ratingClause = typeof p.rating === "number"
+      ? (p.userRatingCount
+          ? `${p.rating.toFixed(1)} i betyg på Google (${p.userRatingCount} recensioner)`
+          : `${p.rating.toFixed(1)} i betyg på Google`)
+      : "";
+
+    let sentence;
+    if(bits.length && ratingClause){
+      sentence = `${capitalizeFirst(typePhrase)} med ${joinSv(bits)} — ${ratingClause}`;
+    } else if(bits.length){
+      sentence = `${capitalizeFirst(typePhrase)} med ${joinSv(bits)}`;
+    } else if(ratingClause){
+      sentence = `${capitalizeFirst(typePhrase)} med ${ratingClause}`;
+    } else {
+      sentence = capitalizeFirst(typePhrase);
     }
-    return "";
+    return sentence + ".";
+  }
+
+  function capitalizeFirst(str){
+    return str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
+  }
+
+  function joinSv(list){
+    if(list.length <= 1) return list[0] || "";
+    return list.slice(0, -1).join(", ") + " och " + list[list.length - 1];
   }
 
   // "Ikväll"-läget (förfest/middag/efterfest) bygger på ett "slot"-fält som
@@ -636,7 +674,7 @@ function reasonFor(p, state){
   parts.push(Math.abs(p.price-state.budget)===0 ? "träffar er budget rakt av" : "ligger nära er budget");
   parts.push(p.dist<=state.radius ? `bara ${p.dist.toFixed(1)} km bort` : `${p.dist.toFixed(1)} km bort, strax utanför er radie`);
   parts.push(Math.abs(p.adv-state.adventure)<=1 ? "matchar hur äventyrliga ni är" : "sticker lite ut från er profil");
-  const traitPart = p.trait ? ` Känt för ${p.trait}.` : "";
+  const traitPart = p.trait ? (p.traitStandalone ? ` ${p.trait}` : ` Känt för ${p.trait}.`) : "";
   const vibeHits = state.vibeTags && state.vibeTags.length ? p.tags.filter(t => state.vibeTags.includes(t)) : [];
   const vibePart = vibeHits.length ? ` Matchar er vibe (${vibeHits.join(", ")}).` : "";
   return `${parts[0].charAt(0).toUpperCase()+parts[0].slice(1)}, ${parts[1]} och ${parts[2]}.${traitPart}${vibePart}`;
