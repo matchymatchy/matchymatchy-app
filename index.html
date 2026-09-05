@@ -1,0 +1,1178 @@
+<!DOCTYPE html>
+<html lang="sv">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>matchymatchy</title>
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500;1,9..144,600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<style>
+  :root{
+    --bg: #241220;
+    --bg-alt: #2f1729;
+    --card: #33192d;
+    --accent: #ff6b5b;
+    --accent-2: #ffc857;
+    --mint: #7fbfa0;
+    --danger: #ff8f8f;
+    --cream: #fbf3e9;
+    --muted: #c9aeb9;
+    --line: rgba(251,243,233,0.14);
+  }
+  *{box-sizing:border-box; -webkit-tap-highlight-color: transparent;}
+  body{
+    margin:0;
+    background: radial-gradient(circle at 20% 0%, #3a1930 0%, var(--bg) 55%);
+    color: var(--cream);
+    font-family: 'Plus Jakarta Sans', sans-serif;
+    min-height:100vh;
+    display:flex;
+    justify-content:center;
+    padding: 28px 16px 60px;
+  }
+  .phone{ width:100%; max-width:420px; }
+  .brand{ display:flex; align-items:baseline; gap:8px; margin-bottom:22px; cursor:pointer; width:fit-content; }
+  .brand:active{ opacity:0.7; }
+  .brand .dot{
+    width:9px;height:9px;border-radius:50%;
+    background: var(--accent);
+    box-shadow: 0 0 0 4px rgba(255,107,91,0.18);
+  }
+  .brand span{
+    font-family:'Fraunces', serif; font-style: italic; font-weight:600;
+    font-size: 20px; letter-spacing: 0.2px; color: var(--cream);
+  }
+  .brand b{ color: var(--accent-2); font-style: normal; }
+
+  .steps{ display:flex; gap:6px; margin-bottom:26px; }
+  .steps .seg{ flex:1; height:4px; border-radius:4px; background: var(--line); overflow:hidden; }
+  .steps .seg i{
+    display:block; height:100%; width:0%;
+    background: linear-gradient(90deg, var(--accent), var(--accent-2));
+    transition: width .5s ease;
+  }
+
+  .card{
+    background: linear-gradient(160deg, var(--card), var(--bg-alt));
+    border: 1px solid var(--line);
+    border-radius: 22px;
+    padding: 28px 24px;
+    position: relative;
+    overflow:hidden;
+    min-height: 380px;
+    display:flex;
+    flex-direction:column;
+  }
+  .card::before{
+    content:""; position:absolute; top:-40px; right:-40px;
+    width:140px; height:140px;
+    background: radial-gradient(circle, rgba(255,200,87,0.18), transparent 70%);
+  }
+
+  .eyebrow{
+    font-size:12px; text-transform:uppercase; letter-spacing:1.6px;
+    color: var(--accent-2); font-weight:700; margin-bottom:10px;
+  }
+  h1{ font-family:'Fraunces', serif; font-weight:600; font-size: 30px; line-height:1.15; margin: 0 0 12px; }
+  h1 em{ color: var(--accent); font-style: italic; }
+  p.lead{ color: var(--muted); font-size:15px; line-height:1.55; margin:0 0 24px; }
+  p.error{ color: var(--danger); font-size:13.5px; line-height:1.5; margin:0 0 16px; }
+
+  .choices{ display:flex; flex-direction:column; gap:10px; margin-bottom: 8px; }
+  .choice{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    background: rgba(251,243,233,0.05);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding: 14px 16px;
+    cursor:pointer;
+    font-size:15px; font-weight:600; color: var(--cream);
+    transition: all .15s ease;
+  }
+  .choice:active{ transform: scale(0.98); }
+  .choice.selected{ border-color: var(--accent); background: rgba(255,107,91,0.14); }
+  .choice .tag{ font-size:12px; font-weight:500; color: var(--muted); }
+  .choice.selected .tag{ color: var(--accent-2); }
+
+  .spacer{ flex:1; }
+
+  .btn{
+    border:none; border-radius:14px; padding:16px;
+    font-family:'Plus Jakarta Sans', sans-serif; font-weight:700; font-size:15px;
+    cursor:pointer; width:100%;
+    transition: transform .15s ease, opacity .2s ease;
+  }
+  .btn:active{ transform: scale(0.97); }
+  .btn-primary{ background: linear-gradient(120deg, var(--accent), #ff8f68); color: #241016; }
+  .btn-primary:disabled{ opacity:0.35; pointer-events:none; }
+  .btn-ghost{ background:transparent; color: var(--muted); font-weight:600; font-size:13px; margin-top:10px; padding:8px; }
+  .btn:focus-visible, .choice:focus-visible{ outline: 2px solid var(--accent-2); outline-offset: 2px; }
+
+  .pin-wrap{ display:flex; justify-content:center; margin: 6px 0 22px; }
+  .pin{
+    width:64px;height:64px; border-radius:50%;
+    background: radial-gradient(circle, rgba(255,200,87,0.25), transparent 70%);
+    display:flex;align-items:center;justify-content:center; position:relative;
+  }
+  .pin svg{ width:30px;height:30px; }
+  .pulse{ position:absolute; inset:0; border-radius:50%; border:1.5px solid var(--accent-2); animation: pulse 1.8s ease-out infinite; }
+  @keyframes pulse{ 0%{ transform:scale(0.6); opacity:0.9;} 100%{ transform:scale(1.8); opacity:0;} }
+  .loc-status{ text-align:center; font-size:13px; color: var(--muted); min-height:18px; }
+
+  .result-card{
+    background: linear-gradient(160deg, var(--card), var(--bg-alt));
+    border:1px solid var(--line);
+    border-radius:20px;
+    padding:20px;
+    margin-bottom:14px;
+    position:relative;
+  }
+  .result-card::after{
+    content:""; position:absolute; left:-8px; top:50%; transform:translateY(-50%);
+    width:16px;height:16px; background: var(--bg); border-radius:50%;
+  }
+  .result-top{ display:flex; justify-content:space-between; align-items:flex-start; gap:10px; margin-bottom:6px; }
+  .result-name{ font-family:'Fraunces', serif; font-weight:600; font-size:19px; }
+  .result-type{ font-size:12px; color: var(--muted); margin-top:2px; }
+  .match-badge{
+    background: var(--accent-2); color:#2a1a08; font-weight:800; font-size:12px;
+    padding: 5px 10px; border-radius:100px; white-space:nowrap;
+  }
+  .result-why{ font-size:13.5px; line-height:1.5; color: var(--cream); opacity:0.88; margin: 10px 0 12px; }
+  .chips{ display:flex; flex-wrap:wrap; gap:6px; }
+  .rating-row{ display:flex; align-items:center; gap:7px; margin: 10px 0 2px; font-size:12px; }
+  .rating-stars{ color: var(--mint); letter-spacing:1px; font-size:13px; }
+  .rating-value{ color: var(--cream); font-weight:700; }
+  .rating-count{ color: var(--muted); }
+  .chip{ font-size:11px; font-weight:600; padding:4px 9px; border-radius:100px; border:1px solid var(--line); color: var(--muted); }
+  .chip.mint{ color: var(--mint); border-color: rgba(127,191,160,0.4); }
+
+  .loading-wrap{ display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; gap:18px; }
+  .scan{ width:70px;height:70px; border-radius:50%; border:3px solid var(--line); border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
+  @keyframes spin{ to{ transform:rotate(360deg);} }
+  .loading-text{ font-size:14px; color: var(--muted); text-align:center; min-height:20px; }
+
+  .footer-note{ text-align:center; font-size:11.5px; color: var(--muted); margin-top:18px; line-height:1.5; }
+  .data-note{ text-align:center; font-size:10.5px; color: var(--muted); opacity:0.6; margin-top:6px; }
+
+  input[type=range]{
+    -webkit-appearance:none; width:100%; height:4px; border-radius:4px;
+    background: var(--line); margin: 18px 0 6px;
+  }
+  input[type=range]::-webkit-slider-thumb{
+    -webkit-appearance:none; width:20px;height:20px; border-radius:50%;
+    background: var(--accent-2); border: 3px solid var(--bg);
+    box-shadow: 0 0 0 2px var(--accent-2); cursor:pointer;
+  }
+  .range-val{ display:flex; justify-content:space-between; font-size:12px; color: var(--muted); margin-bottom: 20px; }
+  .range-val b{ color: var(--cream); font-size:15px; }
+
+  @media (prefers-reduced-motion: reduce){
+    .pulse, .scan{ animation: none; }
+    .steps .seg i{ transition: none; }
+  }
+
+  .mode-tabs{ display:flex; gap:6px; margin-bottom:18px; overflow-x:auto; padding-bottom:2px; }
+  .mode-tabs::-webkit-scrollbar{ display:none; }
+  .mode-tab{
+    flex:0 0 auto; border:1px solid var(--line); background: rgba(251,243,233,0.05);
+    color: var(--muted); font-weight:700; font-size:12.5px; padding:8px 14px;
+    border-radius:100px; cursor:pointer; white-space:nowrap; transition: all .15s ease;
+  }
+  .mode-tab.active{ border-color: var(--accent); background: rgba(255,107,91,0.16); color: var(--cream); }
+  .mode-tab:active{ transform: scale(0.96); }
+  .mode-tab:focus-visible{ outline: 2px solid var(--accent-2); outline-offset: 2px; }
+
+  .field-label{
+    font-size:12px; font-weight:700; text-transform:uppercase; letter-spacing:1.2px;
+    color: var(--muted); margin: 16px 0 8px;
+  }
+  .field-label:first-of-type{ margin-top:2px; }
+  .pill-row{ display:flex; gap:8px; }
+  .pill{
+    flex:1; text-align:center; padding:11px 6px; border-radius:12px;
+    border:1px solid var(--line); background: rgba(251,243,233,0.05);
+    font-weight:700; font-size:13px; cursor:pointer; color: var(--cream);
+    transition: all .15s ease;
+  }
+  .pill:active{ transform: scale(0.96); }
+  .pill.selected{ border-color: var(--accent); background: rgba(255,107,91,0.14); color: var(--accent-2); }
+  .pill:focus-visible{ outline: 2px solid var(--accent-2); outline-offset: 2px; }
+
+  .people-row{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    background: rgba(251,243,233,0.05); border:1px solid var(--line);
+    border-radius:12px; padding:10px 12px; margin-bottom:8px; font-size:13.5px; font-weight:600;
+  }
+  .people-row .meta{ font-size:11.5px; color: var(--muted); font-weight:500; margin-top:1px; }
+  .people-row .remove{ color: var(--muted); font-size:12px; font-weight:600; cursor:pointer; }
+  .people-row .remove:active{ opacity:0.6; }
+  .people-empty{ font-size:13px; color: var(--muted); margin: 0 0 4px; }
+
+  .timeline{ display:flex; flex-direction:column; margin-top:6px; }
+  .timeline-item{ display:flex; gap:14px; }
+  .timeline-track{ display:flex; flex-direction:column; align-items:center; }
+  .timeline-dot{ width:11px;height:11px; border-radius:50%; background: var(--accent-2); margin-top:6px; flex-shrink:0; }
+  .timeline-line{ width:2px; flex:1; background: var(--line); margin: 4px 0; }
+  .timeline-item:last-child .timeline-line{ display:none; }
+  .timeline-content{ padding-bottom:22px; flex:1; }
+  .timeline-time{ font-size:11.5px; font-weight:700; color: var(--accent-2); text-transform:uppercase; letter-spacing:0.6px; margin-bottom:4px; }
+
+  .hero-badge{
+    display:inline-flex; align-items:center; gap:6px;
+    background: rgba(255,200,87,0.12); border:1px solid rgba(255,200,87,0.3);
+    color: var(--accent-2); font-size:11.5px; font-weight:700;
+    padding:6px 12px; border-radius:100px; margin-bottom:16px;
+  }
+  .mode-cards{ display:flex; flex-direction:column; gap:10px; margin-top:14px; }
+  .mode-card{
+    display:flex; flex-direction:column; gap:5px;
+    background: rgba(251,243,233,0.05); border:1px solid var(--line);
+    border-radius:16px; padding:15px 16px; cursor:pointer;
+    transition: all .15s ease;
+  }
+  .mode-card:active{ transform: scale(0.98); }
+  .mode-card:hover{ border-color: var(--accent); background: rgba(255,107,91,0.08); }
+  .mode-card-top{ display:flex; align-items:center; gap:10px; }
+  .mode-card-emoji{ font-size:19px; line-height:1; }
+  .mode-card-title{ font-family:'Fraunces', serif; font-weight:600; font-size:16.5px; }
+  .mode-card-arrow{ margin-left:auto; color: var(--muted); font-size:15px; }
+  .mode-card-desc{ font-size:12.5px; color: var(--muted); line-height:1.45; margin:0; padding-left:29px; }
+</style>
+</head>
+<body>
+<div class="phone">
+  <div class="brand" id="brandHome"><span class="dot"></span><span>matchy<b>matchy</b></span></div>
+  <div class="mode-tabs" id="modeTabs"></div>
+  <div class="steps" id="steps"></div>
+  <div class="card" id="card"></div>
+  <div class="footer-note">matchymatchy scannar platser i din närhet och motiverar varje matchning — inga fler oändliga listor att bläddra igenom.</div>
+  <div class="data-note" id="dataNote"></div>
+</div>
+
+<script>
+/* =========================================================================
+   KONFIG
+   Sätt USE_LIVE_DATA till true och fyll i GOOGLE_MAPS_API_KEY när ni är
+   redo att koppla på riktig platsdata. Resten av appen (UI, matchnings-
+   poäng, rendering) behöver inte ändras — bara PlacesProvider.fetchLive
+   nedan behöver en riktig implementation.
+   ========================================================================= */
+const CONFIG = {
+  USE_LIVE_DATA: true,
+  GOOGLE_MAPS_API_KEY: "AIzaSyAhrCLSTbf2flLPd7w965Xm-NqIoYPag7U"
+};
+
+/* =========================================================================
+   PLACES PROVIDER
+   Ett enda ställe som levererar platser till appen. Idag returnerar den
+   fejkad data. Bytpunkten till Google Places API (New) är fetchLive().
+   Formen på varje plats-objekt {name, type, price, dist, adv, tags, trait,
+   lat, lng} är kontraktet resten av appen bygger på — håll live-datan i
+   samma form så inget annat behöver ändras.
+   ========================================================================= */
+const PlacesProvider = (() => {
+
+  // "slot" används bara av kvällsplans-läget (Ikväll) för att bygga en
+  // rutt från förfest till efterfest. "rating"/"reviews" är exempeldata som
+  // visas som ett litet recensionsbetyg på varje kort — se kommentaren vid
+  // fetchLive() för hur det byts mot riktiga recensioner (t.ex. Google
+  // Places har ett "rating"-fält redan inritat där).
+  const MOCK_PLACES = [
+    {name:"Barrio Nio", type:"Gatukökskrog · Sydamerikanskt", price:1, dist:0.8, adv:2, tags:["Prisvärt","Livlig stämning"], trait:"deras husgjorda chili-sås som stamgästerna pratar om", slot:"main", rating:4.6, reviews:312},
+    {name:"Rök & Lin", type:"Bar · Naturviner", price:2, dist:1.6, adv:3, tags:["Mysigt","Bra för samtal"], trait:"en handplockad vinlista som byts varje vecka", slot:"late", rating:4.8, reviews:189},
+    {name:"Höjden 12", type:"Takbar", price:3, dist:2.4, adv:4, tags:["Utsikt","Datevänligt"], trait:"panoramautsikt över hela stan från åttonde våningen", slot:"late", rating:4.4, reviews:501},
+    {name:"Grus & Grönt", type:"Vegetariskt kök", price:2, dist:1.1, adv:2, tags:["Hälsosamt","Lugnt"], trait:"en meny som byggs helt efter dagens skörd", slot:"main", rating:4.7, reviews:96},
+    {name:"Kajplats 4", type:"Fiskrestaurang · Hamnen", price:3, dist:3.2, adv:3, tags:["Romantiskt","Havsnära"], trait:"råvaror som kommer direkt från morgonens fångst", slot:"main", rating:4.5, reviews:220},
+    {name:"Underjorden", type:"Speakeasy-bar", price:2, dist:2.0, adv:5, tags:["Hemlig entré","Äventyrligt"], trait:"en dold ingång bakom en gammal telefonkiosk", slot:"late", rating:4.9, reviews:143},
+    {name:"Smulan", type:"Bakverk & kaffe", price:1, dist:0.5, adv:1, tags:["Prisvärt","Avslappnat"], trait:"kanelbullar som säljer slut innan lunch", slot:"early", rating:4.3, reviews:267},
+    {name:"Fabriken 7", type:"Industribar · Craft beer", price:2, dist:2.8, adv:4, tags:["Högt i tak","Socialt"], trait:"tolv fatöl som bryggs i lokalen bakom disken", slot:"late", rating:4.6, reviews:178}
+  ];
+
+  // criteria: { coords: {lat,lng}|null, radiusKm, budget, adventure }
+  async function fetchMock(criteria){
+    // Simulerar nätverksfördröjning så "scannar"-steget känns äkta.
+    await new Promise(r => setTimeout(r, 200));
+    return MOCK_PLACES;
+  }
+
+  // Byt ut mot riktiga anrop när CONFIG.USE_LIVE_DATA = true.
+  // Nedan är den faktiska formen på ett Places API (New) Nearby Search-
+  // anrop, redo att aktiveras — kommenterad ut tills en nyckel finns på plats.
+  async function fetchLive(criteria){
+    if(!CONFIG.GOOGLE_MAPS_API_KEY){
+      console.warn("matchymatchy: GOOGLE_MAPS_API_KEY saknas, faller tillbaka på fejkad data.");
+      return fetchMock(criteria);
+    }
+    if(!criteria.coords){
+      // Nearby Search kräver en position — om användaren hoppade över
+      // "dela plats" har vi inget att söka runt, så vi faller tillbaka.
+      console.warn("matchymatchy: ingen plats delad, faller tillbaka på fejkad data.");
+      return fetchMock(criteria);
+    }
+
+    const body = {
+      includedTypes: ["restaurant", "bar", "cafe"],
+      maxResultCount: 20,
+      locationRestriction: {
+        circle: {
+          center: { latitude: criteria.coords.lat, longitude: criteria.coords.lng },
+          radius: criteria.radiusKm * 1000
+        }
+      }
+    };
+
+    const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": CONFIG.GOOGLE_MAPS_API_KEY,
+        // FieldMask styr vad ni betalar för — håll den snäv.
+        "X-Goog-FieldMask": "places.displayName,places.priceLevel,places.location,places.types,places.rating,places.userRatingCount"
+      },
+      body: JSON.stringify(body)
+    });
+
+    if(!res.ok) throw new Error("Places API-anrop misslyckades: " + res.status);
+    const data = await res.json();
+
+    // Mappa Google-formatet till appens interna plats-form.
+    return (data.places || []).map(p => ({
+      name: p.displayName?.text || "Okänt ställe",
+      type: (p.types && p.types[0]) ? p.types[0].replaceAll("_"," ") : "",
+      price: mapGooglePriceLevel(p.priceLevel),
+      dist: haversineKm(criteria.coords, { lat: p.location.latitude, lng: p.location.longitude }),
+      adv: 3, // Google har ingen "äventyrsnivå" — härled från types/rating vid behov
+      tags: (p.types && p.types[0]) ? [capitalizeType(p.types[0])] : [],
+      trait: "",
+      slot: guessSlot(p.types || []),
+      rating: typeof p.rating === "number" ? p.rating : null,
+      reviews: p.userRatingCount || 0,
+      lat: p.location.latitude,
+      lng: p.location.longitude
+    }));
+  }
+
+  function mapGooglePriceLevel(level){
+    const map = { PRICE_LEVEL_INEXPENSIVE:1, PRICE_LEVEL_MODERATE:2, PRICE_LEVEL_EXPENSIVE:3, PRICE_LEVEL_VERY_EXPENSIVE:3 };
+    return map[level] || 2;
+  }
+
+  function capitalizeType(type){
+    const t = type.replaceAll("_"," ");
+    return t.charAt(0).toUpperCase() + t.slice(1);
+  }
+
+  // "Ikväll"-läget (förfest/middag/efterfest) bygger på ett "slot"-fält som
+  // Google inte har — vi gissar det grovt utifrån platstypen så det läget
+  // fortsätter fungera med riktig data också.
+  function guessSlot(types){
+    if(types.some(t => ["cafe","bakery"].includes(t))) return "early";
+    if(types.some(t => ["bar","night_club"].includes(t))) return "late";
+    return "main";
+  }
+
+  function haversineKm(a, b){
+    if(!a || !b) return 99;
+    const R = 6371;
+    const dLat = (b.lat-a.lat) * Math.PI/180;
+    const dLng = (b.lng-a.lng) * Math.PI/180;
+    const s = Math.sin(dLat/2)**2 + Math.cos(a.lat*Math.PI/180)*Math.cos(b.lat*Math.PI/180)*Math.sin(dLng/2)**2;
+    return R * 2 * Math.atan2(Math.sqrt(s), Math.sqrt(1-s));
+  }
+
+  async function getPlaces(criteria){
+    return CONFIG.USE_LIVE_DATA ? fetchLive(criteria) : fetchMock(criteria);
+  }
+
+  return { getPlaces };
+})();
+
+/* =========================================================================
+   MATCHNINGSLOGIK
+   Ren funktion: tar platser + kvizsvar, returnerar rankade matchningar.
+   Oberoende av var platserna kom ifrån (mock eller live).
+   ========================================================================= */
+function scorePlace(p, state){
+  const priceScore = 1 - (Math.abs(p.price - state.budget) / 2);
+  const distScore = p.dist <= state.radius ? 1 : Math.max(0, 1 - ((p.dist - state.radius) / 2));
+  const advScore = 1 - (Math.abs(p.adv - state.adventure) / 4);
+  return priceScore*0.4 + distScore*0.35 + advScore*0.25;
+}
+
+// Ger bonuspoäng till platser vars taggar matchar en lista — används av
+// t.ex. "Dejt"-läget (romantiska taggar) och "Fikapaus" (lugna taggar) för
+// att vikta matchningarna mot rätt känsla, utöver den vanliga scorePlace.
+function tagBonus(p, tagList){
+  const hits = p.tags.filter(t => tagList.includes(t)).length;
+  return Math.min(1, hits * 0.5);
+}
+
+// Litet stjärnbetyg i matchymatchys egen stil (inte kopplat till någon
+// tredjepartstjänst). Byt "rating"/"reviews" i MOCK_PLACES mot riktiga
+// recensioner när ni kopplar på live-data.
+function ratingRow(p){
+  if(p.rating == null) return "";
+  const full = Math.round(p.rating);
+  const stars = "★★★★★☆☆☆☆☆".slice(5-full, 10-full);
+  return `<div class="rating-row">
+    <span class="rating-stars">${stars}</span>
+    <span class="rating-value">${p.rating.toFixed(1)}</span>
+    <span class="rating-count">(${p.reviews} recensioner)</span>
+  </div>`;
+}
+
+function reasonFor(p, state){
+  const parts = [];
+  parts.push(Math.abs(p.price-state.budget)===0 ? "träffar er budget rakt av" : "ligger nära er budget");
+  parts.push(p.dist<=state.radius ? `bara ${p.dist.toFixed(1)} km bort` : `${p.dist.toFixed(1)} km bort, strax utanför er radie`);
+  parts.push(Math.abs(p.adv-state.adventure)<=1 ? "matchar hur äventyrliga ni är" : "sticker lite ut från er profil");
+  const traitPart = p.trait ? ` Känt för ${p.trait}.` : "";
+  return `${parts[0].charAt(0).toUpperCase()+parts[0].slice(1)}, ${parts[1]} och ${parts[2]}.${traitPart}`;
+}
+
+async function computeMatches(state){
+  const places = await PlacesProvider.getPlaces({
+    coords: state.coords,
+    radiusKm: state.radius,
+    budget: state.budget,
+    adventure: state.adventure
+  });
+
+  // Vid reglagets ändlägen filtrerar vi strikt på prisnivå istället för att
+  // bara vikta den i poängen — annars skulle "över 2000 kr" ändå kunna visa
+  // billiga ställen bara för att fylla ut till tre kort.
+  let candidates = places;
+  if(isOpenEndedLow(state.budgetAmount)){
+    candidates = places.filter(p => p.price === 1);
+  } else if(isOpenEndedHigh(state.budgetAmount)){
+    candidates = places.filter(p => p.price === 3);
+  }
+
+  return candidates
+    .map(p => ({ ...p, score: scorePlace(p, state) }))
+    .sort((a,b) => b.score - a.score)
+    .slice(0, 3);
+}
+
+/* =========================================================================
+   APP STATE + UI
+   ========================================================================= */
+const state = {
+  mode: 'home',
+  step: 0,
+  budget: null, budgetAmount: 300, radius: 3, adventure: 3, coords: null,
+  people: [],                         // "Med vänner": tillagda personer
+  groupDraft: { budget: null, adventure: null }, // "Med vänner": person som håller på att läggas till
+  groupSize: 0
+};
+
+const el = {
+  brandHome: document.getElementById('brandHome'),
+  modeTabs: document.getElementById('modeTabs'),
+  steps: document.getElementById('steps'),
+  card: document.getElementById('card'),
+  dataNote: document.getElementById('dataNote')
+};
+
+el.brandHome.addEventListener('click', goHome);
+
+function goHome(){
+  if(state.mode === 'home' && state.step === 0) return;
+  state.mode = 'home';
+  state.step = 0;
+  state.coords = null;
+  state.people = [];
+  state.groupDraft = { budget: null, adventure: null };
+  state.groupSize = 0;
+  el.card.style.minHeight = '380px';
+  render();
+}
+
+const MODES = [
+  { id:'now',         label:'Nu' },
+  { id:'tonight',      label:'Ikväll' },
+  { id:'spontaneous', label:'Spontant' },
+  { id:'group',       label:'Med vänner' },
+  { id:'date',        label:'Dejt' },
+  { id:'fika',        label:'Fikapaus' }
+];
+
+// Varje läge har sina egna quiz-steg, sin egen matchningsfunktion och sitt
+// eget resultat. Definieras längst ner i filen (efter att alla render- och
+// matchningsfunktioner finns), men funktionsdeklarationer hissas så det
+// spelar ingen roll var i filen FLOWS refererar till dem.
+let FLOWS;
+
+function renderModeTabs(){
+  el.modeTabs.innerHTML = MODES.map(m =>
+    `<button class="mode-tab${state.mode===m.id?' active':''}" data-mode="${m.id}" type="button">${m.label}</button>`
+  ).join('');
+  el.modeTabs.querySelectorAll('.mode-tab').forEach(btn=>{
+    btn.addEventListener('click', () => switchMode(btn.dataset.mode));
+  });
+}
+
+function switchMode(mode){
+  if(mode === state.mode && state.step === 0) return;
+  state.mode = mode;
+  state.step = 0;
+  state.coords = null;
+  state.people = [];
+  state.groupDraft = { budget: null, adventure: null };
+  state.groupSize = 0;
+  el.card.style.minHeight = '380px';
+  render();
+}
+
+function renderStepIndicator(total){
+  el.steps.style.display = total > 1 ? 'flex' : 'none';
+  el.steps.innerHTML = '';
+  const frag = document.createDocumentFragment();
+  for(let i=0;i<total;i++){
+    const seg = document.createElement('div');
+    seg.className = 'seg';
+    const fill = document.createElement('i');
+    fill.style.width = i < state.step ? '100%' : (i === state.step ? '35%' : '0%');
+    seg.appendChild(fill);
+    frag.appendChild(seg);
+  }
+  el.steps.appendChild(frag);
+}
+
+const HOME_MODE_INFO = {
+  now:         { emoji:"🎯", desc:"Snabbt quiz om budget, sträcka och stämning — tre matchningar på under en minut." },
+  tonight:     { emoji:"🌙", desc:"Samma quiz, men resultatet blir en hel kväll: förfest, middag och efterfest." },
+  spontaneous: { emoji:"🎲", desc:"Inga frågor. Ett tryck, så väljer vi åt er." },
+  group:       { emoji:"👯", desc:"Lägg till hela gänget så väger vi ihop allas smak till en matchning alla gillar." },
+  date:        { emoji:"💕", desc:"Samma quiz, men vi viktar upp mysiga och romantiska ställen — perfekt för två." },
+  fika:        { emoji:"☕", desc:"En enda fråga. Ett lugnt, nära ställe för en snabb paus." }
+};
+
+function renderHome(){
+  el.card.style.minHeight = '380px';
+  el.card.innerHTML = `
+    <div class="hero-badge">✨ Slut på att bläddra</div>
+    <h1>Hitta något att göra <em>på sekunder</em></h1>
+    <p class="lead">matchymatchy scannar det som finns nära er och föreslår tre ställen som faktiskt passar — inga oändliga listor att skrolla igenom.</p>
+    <button class="btn btn-primary" id="startNowBtn">Kom igång</button>
+    <div class="field-label" style="margin-top:22px;">Eller välj ett läge direkt</div>
+    <div class="mode-cards" id="homeModeCards">
+      ${MODES.map(m => `
+        <div class="mode-card" data-mode="${m.id}">
+          <div class="mode-card-top">
+            <span class="mode-card-emoji">${HOME_MODE_INFO[m.id].emoji}</span>
+            <span class="mode-card-title">${m.label}</span>
+            <span class="mode-card-arrow">→</span>
+          </div>
+          <p class="mode-card-desc">${HOME_MODE_INFO[m.id].desc}</p>
+        </div>
+      `).join('')}
+    </div>
+  `;
+  document.getElementById('startNowBtn').addEventListener('click', () => switchMode('now'));
+  document.querySelectorAll('#homeModeCards .mode-card').forEach(card => {
+    card.addEventListener('click', () => switchMode(card.dataset.mode));
+  });
+}
+
+function render(){
+  if(state.mode === 'home'){
+    el.modeTabs.style.display = 'none';
+    el.steps.style.display = 'none';
+    el.dataNote.textContent = '';
+    renderHome();
+    return;
+  }
+  renderModeTabs();
+  el.modeTabs.style.display = 'flex';
+  const flow = FLOWS[state.mode];
+  renderStepIndicator(flow.steps.length);
+  el.dataNote.textContent = CONFIG.USE_LIVE_DATA ? "" : "Visar just nu exempeldata — riktiga platser kopplas på senare.";
+  if(state.step < flow.steps.length){
+    flow.steps[state.step]();
+  } else {
+    renderLoadingGeneric(flow);
+  }
+}
+
+function renderLocation(){
+  el.card.innerHTML = `
+    <div class="eyebrow">Steg 1 · Plats</div>
+    <h1>Var är ni <em>just nu?</em></h1>
+    <p class="lead">Vi behöver din plats för att kunna scanna omgivningen och matcha er med rätt ställen inom rimligt avstånd.</p>
+    <div class="pin-wrap">
+      <div class="pin">
+        <div class="pulse"></div>
+        <svg viewBox="0 0 24 24" fill="none"><path d="M12 21s7-6.2 7-11.2A7 7 0 0 0 5 9.8C5 14.8 12 21 12 21z" stroke="#ffc857" stroke-width="1.6"/><circle cx="12" cy="9.5" r="2.4" stroke="#ffc857" stroke-width="1.6"/></svg>
+      </div>
+    </div>
+    <p class="loc-status" id="locStatus">Tryck för att dela din plats</p>
+    <div class="spacer"></div>
+    <button class="btn btn-primary" id="locBtn">Dela plats</button>
+    <button class="btn btn-ghost" id="skipLoc">Hoppa över, jag skriver in ort själv</button>
+  `;
+  document.getElementById('locBtn').addEventListener('click', requestLocation);
+  document.getElementById('skipLoc').addEventListener('click', () => { state.coords = null; state.step++; render(); });
+}
+
+function requestLocation(){
+  const status = document.getElementById('locStatus');
+  status.textContent = "Söker din plats…";
+  if(!navigator.geolocation){
+    status.textContent = "Kunde inte hitta plats — går vidare ändå";
+    setTimeout(() => { state.step++; render(); }, 700);
+    return;
+  }
+  navigator.geolocation.getCurrentPosition(
+    (pos) => {
+      state.coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
+      status.textContent = "Plats hittad ✓";
+      setTimeout(() => { state.step++; render(); }, 500);
+    },
+    () => {
+      status.textContent = "Ingen åtkomst — går vidare ändå";
+      setTimeout(() => { state.coords = null; state.step++; render(); }, 700);
+    }
+  );
+}
+
+function renderSingleChoiceStep({ eyebrow, title, lead, options, field, buttonLabel }){
+  el.card.innerHTML = `
+    <div class="eyebrow">${eyebrow}</div>
+    <h1>${title}</h1>
+    <p class="lead">${lead}</p>
+    <div class="choices" id="choiceList">
+      ${options.map(o => `<div class="choice" tabindex="0" role="button" data-v="${o.v}"><span>${o.l}</span><span class="tag">${o.d}</span></div>`).join('')}
+    </div>
+    <div class="spacer"></div>
+    <button class="btn btn-primary" id="nextBtn" disabled>${buttonLabel}</button>
+  `;
+  const list = document.getElementById('choiceList');
+  const nextBtn = document.getElementById('nextBtn');
+
+  function select(target){
+    list.querySelectorAll('.choice').forEach(c => c.classList.remove('selected'));
+    target.classList.add('selected');
+    state[field] = parseInt(target.dataset.v, 10);
+    nextBtn.disabled = false;
+  }
+
+  list.addEventListener('click', (e) => {
+    const target = e.target.closest('.choice');
+    if(target) select(target);
+  });
+  list.addEventListener('keydown', (e) => {
+    if((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('choice')){
+      e.preventDefault();
+      select(e.target);
+    }
+  });
+  nextBtn.addEventListener('click', () => { state.step++; render(); });
+}
+
+const BUDGET_MIN = 100;
+const BUDGET_MAX = 2000;
+
+function amountToTier(amount){
+  if(amount <= BUDGET_MIN) return 1;
+  if(amount >= BUDGET_MAX) return 3;
+  const range = BUDGET_MAX - BUDGET_MIN;
+  if(amount < BUDGET_MIN + range/3) return 1;
+  if(amount < BUDGET_MIN + (range*2)/3) return 2;
+  return 3;
+}
+
+// Vid reglagets ändlägen är det öppna intervall ("under 100 kr" / "över
+// 2000 kr") snarare än en exakt nivå — det hanteras separat i computeMatches.
+function isOpenEndedLow(amount){ return amount <= BUDGET_MIN; }
+function isOpenEndedHigh(amount){ return amount >= BUDGET_MAX; }
+
+function budgetValueLabel(amount){
+  if(isOpenEndedLow(amount)) return "Under 100 kr";
+  if(isOpenEndedHigh(amount)) return "Över 2000 kr";
+  return amount + " kr";
+}
+
+function budgetNote(amount){
+  if(isOpenEndedLow(amount)) return "Visar bara ställen under 100 kr";
+  if(isOpenEndedHigh(amount)) return "Visar bara ställen över 2000 kr";
+  const labels = { 1:"€ · Fika-läge, prisvärt", 2:"€€ · Vardagslyx", 3:"€€€ · Vi unnar oss" };
+  return labels[amountToTier(amount)];
+}
+
+function renderBudget(){
+  el.card.innerHTML = `
+    <div class="eyebrow">Steg 2 · Budget</div>
+    <h1>Vad är er <em>budget</em>?</h1>
+    <p class="lead">Dra i reglaget för ungefär hur mycket ni vill lägga per person. Dra hela vägen till en kant för att bara se ställen under 100 kr eller över 2000 kr.</p>
+    <input type="range" min="${BUDGET_MIN}" max="${BUDGET_MAX}" step="10" value="${state.budgetAmount}" id="budgetRange" aria-label="Budget per person i kronor">
+    <div class="range-val"><span>Under 100</span><b id="budgetVal">${budgetValueLabel(state.budgetAmount)}</b><span>Över 2000</span></div>
+    <p class="loc-status" id="budgetTier">${budgetNote(state.budgetAmount)}</p>
+    <div class="spacer"></div>
+    <button class="btn btn-primary" id="nextBtn">Nästa</button>
+  `;
+  const range = document.getElementById('budgetRange');
+  const valEl = document.getElementById('budgetVal');
+  const tierEl = document.getElementById('budgetTier');
+  range.addEventListener('input', () => {
+    state.budgetAmount = parseInt(range.value, 10);
+    valEl.textContent = budgetValueLabel(state.budgetAmount);
+    tierEl.textContent = budgetNote(state.budgetAmount);
+  });
+  document.getElementById('nextBtn').addEventListener('click', () => {
+    state.budget = amountToTier(state.budgetAmount);
+    state.step++;
+    render();
+  });
+}
+
+function renderRadius(){
+  el.card.innerHTML = `
+    <div class="eyebrow">Steg 3 · Sträcka</div>
+    <h1>Hur långt kan ni <em>tänkas gå?</em></h1>
+    <p class="lead">Dra i reglaget för hur stort område vi ska scanna av.</p>
+    <input type="range" min="0.5" max="5" step="0.1" value="${state.radius}" id="radiusRange" aria-label="Sökradie i kilometer">
+    <div class="range-val"><span>0,5 km</span><b id="radiusVal">${state.radius.toFixed(1)} km</b><span>5 km</span></div>
+    <div class="spacer"></div>
+    <button class="btn btn-primary" id="nextBtn">Nästa</button>
+  `;
+  const range = document.getElementById('radiusRange');
+  const valEl = document.getElementById('radiusVal');
+  range.addEventListener('input', () => {
+    state.radius = parseFloat(range.value);
+    valEl.textContent = state.radius.toFixed(1) + " km";
+  });
+  document.getElementById('nextBtn').addEventListener('click', () => { state.step++; render(); });
+}
+
+function renderAdventure(){
+  renderSingleChoiceStep({
+    eyebrow: "Steg 4 · Stämning",
+    title: "Är ni <em>äventyrliga?</em>",
+    lead: "Det hjälper oss välja mellan säkra kort och udda pärlor.",
+    field: "adventure",
+    buttonLabel: state.mode === 'tonight' ? "Planera kvällen" : (state.mode === 'date' ? "Hitta dejtställen" : "Hitta matchningar"),
+    options: [
+      {v:1,l:"Klassiskt", d:"Vi vet vad vi gillar"},
+      {v:3,l:"Lagom nyfikna", d:"Gärna något nytt, inom rimliga gränser"},
+      {v:5,l:"Äventyrliga", d:"Överraska oss gärna"}
+    ]
+  });
+}
+
+// Delas av alla lägen — bara meddelandena och matchningsfunktionen skiljer.
+function renderLoadingGeneric(flow){
+  const messages = flow.loadingMessages(state);
+  el.card.innerHTML = `
+    <div class="eyebrow">${flow.loadingEyebrow || "Matchar"}</div>
+    <h1>${flow.loadingTitle || "Scannar <em>omgivningen…</em>"}</h1>
+    <div class="loading-wrap">
+      <div class="scan"></div>
+      <div class="loading-text" id="loadText">${messages[0]}</div>
+    </div>
+  `;
+  let i = 0;
+  const loadTextEl = document.getElementById('loadText');
+  const messageTimer = setInterval(() => {
+    i++;
+    if(i < messages.length) loadTextEl.textContent = messages[i];
+  }, 550);
+
+  // Kör den faktiska (idag: fejkade, senare: riktiga) matchningen medan
+  // animationen snurrar, och väntar in båda innan vi visar resultat.
+  const minDisplayTime = new Promise(r => setTimeout(r, flow.minDelay || 2200));
+  Promise.all([flow.matcher(state), minDisplayTime])
+    .then(([result]) => {
+      clearInterval(messageTimer);
+      state.step++;
+      flow.resultRenderer(result);
+    })
+    .catch((err) => {
+      clearInterval(messageTimer);
+      console.error("matchymatchy: kunde inte hämta matchningar", err);
+      renderError();
+    });
+}
+
+function renderError(){
+  el.card.innerHTML = `
+    <div class="eyebrow">Något gick fel</div>
+    <h1>Kunde inte <em>hitta matchningar</em></h1>
+    <p class="error">Vi kunde inte scanna omgivningen just nu. Kontrollera anslutningen och försök igen.</p>
+    <div class="spacer"></div>
+    <button class="btn btn-primary" id="retryBtn">Försök igen</button>
+  `;
+  document.getElementById('retryBtn').addEventListener('click', () => switchMode(state.mode));
+}
+
+function renderResults(matches){
+  el.card.style.minHeight = 'auto';
+
+  if(matches.length === 0){
+    el.card.innerHTML = `
+      <div class="eyebrow">Inga träffar</div>
+      <h1>Inget som <em>matchar riktigt</em></h1>
+      <p class="lead">Ingenting i vårt urval låg i det spannet just nu. Prova igen med andra val.</p>
+    `;
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'btn btn-primary';
+    retryBtn.textContent = 'Prova igen';
+    retryBtn.addEventListener('click', () => switchMode(state.mode));
+    el.card.appendChild(retryBtn);
+    return;
+  }
+
+  const modeLead = {
+    now: "Baserat på budget, avstånd och äventyrslust — här är vad matchymatchy hittade åt er.",
+    spontaneous: "Vi slumpade fram budget, sträcka och stämning å era vägnar — här är vad vi hittade.",
+    group: `Vi vägde ihop smaken hos ${state.groupSize || 1} ${state.groupSize === 1 ? 'person' : 'personer'} och hittade det här.`,
+    date: "Vi viktade upp mysiga, romantiska ställen — här är vad som passade bäst för er två.",
+    fika: "En snabb, lugn paus nära er — inget krångel."
+  };
+
+  el.card.innerHTML = `
+    <div class="eyebrow">Klart</div>
+    <h1>Era <em>${matches.length === 3 ? '3 matchningar' : matches.length + (matches.length===1 ? ' matchning' : ' matchningar')}</em></h1>
+    <p class="lead">${modeLead[state.mode] || modeLead.now}</p>
+  `;
+  const frag = document.createDocumentFragment();
+  matches.forEach(p => {
+    const pct = Math.round(60 + p.score * 38);
+    const card = document.createElement('div');
+    card.className = 'result-card';
+    card.innerHTML = `
+      <div class="result-top">
+        <div>
+          <div class="result-name">${p.name}</div>
+          <div class="result-type">${p.type}</div>
+        </div>
+        <div class="match-badge">${pct}% match</div>
+      </div>
+      <div class="result-why">${reasonFor(p, state)}</div>
+      <div class="chips">${p.tags.map((t,i) => `<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
+      ${ratingRow(p)}
+    `;
+    frag.appendChild(card);
+  });
+  el.card.appendChild(frag);
+
+  const restartBtn = document.createElement('button');
+  restartBtn.className = 'btn btn-ghost';
+  restartBtn.style.marginTop = '4px';
+  restartBtn.textContent = state.mode === 'spontaneous' ? 'Överraska oss igen' : 'Gör om matchningen';
+  restartBtn.addEventListener('click', () => switchMode(state.mode));
+  el.card.appendChild(restartBtn);
+}
+
+/* =========================================================================
+   LÄGE: SPONTANT
+   Inga frågor alls — ett enda tryck slumpar fram budget/sträcka/stämning
+   och kör direkt till resultat. Återanvänder computeMatches/renderResults.
+   ========================================================================= */
+function renderSpontaneousIntro(){
+  el.card.innerHTML = `
+    <div class="eyebrow">Spontant</div>
+    <h1>Inga frågor. <em>Bara ett förslag.</em></h1>
+    <p class="lead">Vi slumpar fram budget, sträcka och stämning åt er och hittar tre ställen direkt — inget quiz.</p>
+    <div class="spacer"></div>
+    <button class="btn btn-primary" id="surpriseBtn">Överraska oss</button>
+  `;
+  document.getElementById('surpriseBtn').addEventListener('click', () => { state.step++; render(); });
+}
+
+async function computeSpontaneousMatches(state){
+  const budgetTiers = [1,2,3];
+  const budgetAmounts = { 1:150, 2:400, 3:1200 };
+  const radii = [1, 1.5, 2, 3, 4];
+  const adventures = [1, 3, 5];
+
+  state.budget = budgetTiers[Math.floor(Math.random()*budgetTiers.length)];
+  state.budgetAmount = budgetAmounts[state.budget];
+  state.radius = radii[Math.floor(Math.random()*radii.length)];
+  state.adventure = adventures[Math.floor(Math.random()*adventures.length)];
+
+  return computeMatches(state);
+}
+
+/* =========================================================================
+   LÄGE: MED VÄNNER
+   Lägg till allas budget + stämning en i taget, vi räknar ut ett snitt
+   (kompromiss) och kör det snittet genom samma computeMatches som vanligt.
+   ========================================================================= */
+function peopleRowHtml(p, i){
+  return `<div class="people-row">
+    <div><div>${p.name}</div><div class="meta">${budgetLabelShort(p.budget)} · ${advLabelShort(p.adventure)}</div></div>
+    <span class="remove" data-remove="${i}">Ta bort</span>
+  </div>`;
+}
+function budgetLabelShort(v){ return {1:"€",2:"€€",3:"€€€"}[v] || "–"; }
+function advLabelShort(v){ return {1:"Klassiskt",3:"Lagom",5:"Äventyrligt"}[v] || "–"; }
+
+function renderGroupPeople(){
+  const draft = state.groupDraft;
+  el.card.innerHTML = `
+    <div class="eyebrow">Med vänner</div>
+    <h1>Vilka är <em>med ikväll?</em></h1>
+    <p class="lead">Lägg till alla i gänget, en i taget — vi väger ihop allas smak till en gemensam matchning.</p>
+
+    <div id="peopleList">
+      ${state.people.length ? state.people.map(peopleRowHtml).join('') : `<p class="people-empty">Ingen tillagd än.</p>`}
+    </div>
+
+    <div class="field-label">Ny person · budget</div>
+    <div class="pill-row" id="draftBudget">
+      ${[{v:1,l:"€"},{v:2,l:"€€"},{v:3,l:"€€€"}].map(o=>`<div class="pill${draft.budget===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
+    </div>
+    <div class="field-label">Stämning</div>
+    <div class="pill-row" id="draftAdv">
+      ${[{v:1,l:"Klassiskt"},{v:3,l:"Lagom"},{v:5,l:"Äventyrligt"}].map(o=>`<div class="pill${draft.adventure===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
+    </div>
+    <button class="btn btn-ghost" id="addPersonBtn" style="border:1px solid var(--line); border-radius:12px; margin-top:8px;" ${draft.budget && draft.adventure ? '' : 'disabled'}>+ Lägg till person</button>
+
+    <div class="spacer"></div>
+    <button class="btn btn-primary" id="groupNextBtn" ${state.people.length ? '' : 'disabled'}>Hitta matchningar för gänget</button>
+  `;
+
+  el.card.querySelectorAll('#peopleList [data-remove]').forEach(btn=>{
+    btn.addEventListener('click', () => {
+      state.people.splice(parseInt(btn.dataset.remove, 10), 1);
+      render();
+    });
+  });
+  el.card.querySelectorAll('#draftBudget .pill').forEach(p=>{
+    p.addEventListener('click', () => { state.groupDraft.budget = parseInt(p.dataset.v, 10); render(); });
+  });
+  el.card.querySelectorAll('#draftAdv .pill').forEach(p=>{
+    p.addEventListener('click', () => { state.groupDraft.adventure = parseInt(p.dataset.v, 10); render(); });
+  });
+  const addBtn = document.getElementById('addPersonBtn');
+  if(addBtn){
+    addBtn.addEventListener('click', () => {
+      state.people.push({ name: `Person ${state.people.length+1}`, budget: state.groupDraft.budget, adventure: state.groupDraft.adventure });
+      state.groupDraft = { budget: null, adventure: null };
+      render();
+    });
+  }
+  const nextBtn = document.getElementById('groupNextBtn');
+  if(!nextBtn.disabled){
+    nextBtn.addEventListener('click', () => { state.step++; render(); });
+  }
+}
+
+async function computeGroupMatches(state){
+  const people = state.people.length ? state.people : [{ name:"Du", budget: state.budget || 2, adventure: state.adventure || 3 }];
+  const avg = (key) => people.reduce((sum,p)=>sum+p[key],0) / people.length;
+
+  state.budget = Math.min(3, Math.max(1, Math.round(avg('budget'))));
+  state.adventure = Math.min(5, Math.max(1, Math.round(avg('adventure'))));
+  state.budgetAmount = { 1:150, 2:400, 3:1200 }[state.budget];
+  state.radius = state.radius || 3;
+  state.groupSize = people.length;
+
+  return computeMatches(state);
+}
+
+/* =========================================================================
+   LÄGE: IKVÄLL
+   Samma quiz som "Nu", men resultatet blir en kvällsplan i tre steg
+   (förfest → middag → efterfest) istället för tre fristående alternativ.
+   ========================================================================= */
+async function computeEveningPlan(state){
+  const places = await PlacesProvider.getPlaces({
+    coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
+  });
+  const bestInSlot = (slot) => places
+    .filter(p => p.slot === slot)
+    .map(p => ({ ...p, score: scorePlace(p, state) }))
+    .sort((a,b) => b.score - a.score)[0] || null;
+
+  return {
+    early: { time:"17:30", label:"Förfest", place: bestInSlot('early') },
+    main:  { time:"19:30", label:"Middag",  place: bestInSlot('main') },
+    late:  { time:"22:00", label:"Efterfest", place: bestInSlot('late') }
+  };
+}
+
+function renderEveningPlan(plan){
+  el.card.style.minHeight = 'auto';
+  const items = [plan.early, plan.main, plan.late].filter(s => s.place);
+
+  if(items.length === 0){
+    el.card.innerHTML = `
+      <div class="eyebrow">Inga träffar</div>
+      <h1>Inget som <em>matchar riktigt</em></h1>
+      <p class="lead">Prova en bredare budget eller större sträcka.</p>
+    `;
+    const retryBtn = document.createElement('button');
+    retryBtn.className = 'btn btn-primary';
+    retryBtn.textContent = 'Prova igen';
+    retryBtn.addEventListener('click', () => switchMode('tonight'));
+    el.card.appendChild(retryBtn);
+    return;
+  }
+
+  el.card.innerHTML = `
+    <div class="eyebrow">Klart</div>
+    <h1>Er <em>kväll</em>, planerad</h1>
+    <p class="lead">Från förfest till efterfest — tre ställen som passar er stämning och budget ikväll.</p>
+    <div class="timeline" id="timelineWrap"></div>
+  `;
+  const wrap = document.getElementById('timelineWrap');
+  items.forEach(item => {
+    const p = item.place;
+    const row = document.createElement('div');
+    row.className = 'timeline-item';
+    row.innerHTML = `
+      <div class="timeline-track"><div class="timeline-dot"></div><div class="timeline-line"></div></div>
+      <div class="timeline-content">
+        <div class="timeline-time">${item.time} · ${item.label}</div>
+        <div class="result-name">${p.name}</div>
+        <div class="result-type">${p.type}</div>
+        <div class="result-why">${reasonFor(p, state)}</div>
+        <div class="chips">${p.tags.map((t,i)=>`<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
+        ${ratingRow(p)}
+      </div>
+    `;
+    wrap.appendChild(row);
+  });
+
+  const restartBtn = document.createElement('button');
+  restartBtn.className = 'btn btn-ghost';
+  restartBtn.style.marginTop = '6px';
+  restartBtn.textContent = 'Gör om planen';
+  restartBtn.addEventListener('click', () => switchMode('tonight'));
+  el.card.appendChild(restartBtn);
+}
+
+/* =========================================================================
+   LÄGE: DEJT
+   Samma quiz som "Nu" (location, budget, radie, äventyr), men matchningen
+   viktar upp romantiska/mysiga taggar utöver den vanliga poängen.
+   ========================================================================= */
+const DATE_BONUS_TAGS = ["Romantiskt", "Mysigt", "Datevänligt", "Utsikt"];
+
+async function computeDateMatches(state){
+  const places = await PlacesProvider.getPlaces({
+    coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
+  });
+  return places
+    .map(p => ({ ...p, score: scorePlace(p, state) * 0.75 + tagBonus(p, DATE_BONUS_TAGS) * 0.25 }))
+    .sort((a,b) => b.score - a.score)
+    .slice(0, 3);
+}
+
+/* =========================================================================
+   LÄGE: FIKAPAUS
+   Det snabbaste "riktiga" läget efter Spontant — en enda fråga (budget),
+   resten sätts till lugna standardvärden: kort radie, låg äventyrsnivå,
+   och matchningen viktar upp avslappnade/lugna taggar.
+   ========================================================================= */
+const CHILL_BONUS_TAGS = ["Avslappnat", "Lugnt", "Prisvärt"];
+
+function renderFikaIntro(){
+  el.card.innerHTML = `
+    <div class="eyebrow">Fikapaus</div>
+    <h1>Snabb <em>paus?</em></h1>
+    <p class="lead">En fråga, så hittar vi ett lugnt, nära ställe att andas ut på.</p>
+    <div class="field-label">Budget</div>
+    <div class="pill-row" id="fikaBudget">
+      ${[{v:1,l:"€"},{v:2,l:"€€"},{v:3,l:"€€€"}].map(o=>`<div class="pill${state.budget===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
+    </div>
+    <div class="spacer"></div>
+    <button class="btn btn-primary" id="fikaNextBtn" ${state.budget ? '' : 'disabled'}>Hitta ett ställe</button>
+  `;
+  el.card.querySelectorAll('#fikaBudget .pill').forEach(pill=>{
+    pill.addEventListener('click', () => { state.budget = parseInt(pill.dataset.v, 10); render(); });
+  });
+  const nextBtn = document.getElementById('fikaNextBtn');
+  if(!nextBtn.disabled){
+    nextBtn.addEventListener('click', () => {
+      state.radius = 1.5;
+      state.adventure = 1;
+      state.budgetAmount = { 1:150, 2:400, 3:1200 }[state.budget];
+      state.step++;
+      render();
+    });
+  }
+}
+
+async function computeFikaMatches(state){
+  const places = await PlacesProvider.getPlaces({
+    coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
+  });
+  return places
+    .map(p => ({ ...p, score: scorePlace(p, state) * 0.7 + tagBonus(p, CHILL_BONUS_TAGS) * 0.3 }))
+    .sort((a,b) => b.score - a.score)
+    .slice(0, 3);
+}
+
+/* =========================================================================
+   FLÖDEN
+   Kopplar ihop varje läge med sina steg, sin matchningsfunktion och sitt
+   resultat. Måste sättas efter att alla funktioner ovan är deklarerade,
+   men eftersom de är function-deklarationer (hissade) spelar placeringen
+   ingen roll — det här är bara ihopkopplingen.
+   ========================================================================= */
+FLOWS = {
+  now: {
+    steps: [renderLocation, renderBudget, renderRadius, renderAdventure],
+    matcher: computeMatches,
+    resultRenderer: renderResults,
+    loadingMessages: (s) => [
+      `Analyserar platser inom ${s.radius.toFixed(1)} km…`,
+      "Jämför med er budget…",
+      "Väger in äventyrsfaktorn…",
+      "Rankar bästa matchningarna…"
+    ]
+  },
+  tonight: {
+    steps: [renderLocation, renderBudget, renderRadius, renderAdventure],
+    matcher: computeEveningPlan,
+    resultRenderer: renderEveningPlan,
+    loadingEyebrow: "Planerar",
+    loadingTitle: "Bygger <em>kvällsplanen…</em>",
+    loadingMessages: () => [
+      "Kollar vad som är öppet ikväll…",
+      "Väljer förfest, middag och efterfest…",
+      "Sätter ihop rutten…",
+      "Klar strax…"
+    ]
+  },
+  spontaneous: {
+    steps: [renderSpontaneousIntro],
+    matcher: computeSpontaneousMatches,
+    resultRenderer: renderResults,
+    minDelay: 1400,
+    loadingMessages: () => ["Slumpar fram något bra…", "Dubbelkollar att det passar…", "Klart snart…"]
+  },
+  group: {
+    steps: [renderGroupPeople],
+    matcher: computeGroupMatches,
+    resultRenderer: renderResults,
+    loadingMessages: () => ["Väger ihop allas önskemål…", "Hittar en kompromiss alla gillar…", "Rankar bästa matchningarna…"]
+  },
+  date: {
+    steps: [renderLocation, renderBudget, renderRadius, renderAdventure],
+    matcher: computeDateMatches,
+    resultRenderer: renderResults,
+    loadingMessages: (s) => [
+      `Analyserar platser inom ${s.radius.toFixed(1)} km…`,
+      "Letar efter mysiga hörn…",
+      "Väger in stämningen…",
+      "Rankar bästa dejtställena…"
+    ]
+  },
+  fika: {
+    steps: [renderFikaIntro],
+    matcher: computeFikaMatches,
+    resultRenderer: renderResults,
+    minDelay: 1200,
+    loadingMessages: () => ["Letar efter ett lugnt hörn…", "Kollar vad som är öppet nu…", "Klart snart…"]
+  }
+};
+
+render();
+</script>
+</body>
+</html>
