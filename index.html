@@ -124,6 +124,26 @@
   .pulse{ position:absolute; inset:0; border-radius:50%; border:1.5px solid var(--accent-2); animation: pulse 1.8s ease-out infinite; }
   @keyframes pulse{ 0%{ transform:scale(0.6); opacity:0.9;} 100%{ transform:scale(1.8); opacity:0;} }
   .loc-status{ text-align:center; font-size:13px; color: var(--muted); min-height:18px; }
+  .loc-status.err{ color: var(--danger); }
+
+  .loc-or{ display:flex; align-items:center; gap:10px; margin: 18px 0 12px; color: var(--muted); font-size:12px; text-transform:uppercase; letter-spacing:1px; font-weight:700; }
+  .loc-or::before, .loc-or::after{ content:""; flex:1; height:1px; background: var(--line); }
+  .loc-search-row{ display:flex; gap:8px; }
+  .text-input{
+    flex:1; min-width:0;
+    background: rgba(251,243,233,0.05);
+    border:1px solid var(--line);
+    border-radius:14px;
+    padding: 13px 14px;
+    font-family:'Plus Jakarta Sans', sans-serif;
+    font-size:14px; font-weight:600; color: var(--cream);
+  }
+  .text-input::placeholder{ color: var(--muted); font-weight:500; }
+  .text-input:focus-visible{ outline: 2px solid var(--accent-2); outline-offset: 2px; }
+  .btn-search{
+    flex:0 0 auto; width:auto; padding: 0 18px;
+    background: linear-gradient(120deg, var(--accent), #ff8f68); color:#241016;
+  }
 
   .result-card{
     background: linear-gradient(160deg, var(--card), var(--bg-alt));
@@ -790,12 +810,29 @@ function renderLocation(){
       </div>
     </div>
     <p class="loc-status" id="locStatus">Tryck för att dela din plats</p>
-    <div class="spacer"></div>
     <button class="btn btn-primary" id="locBtn">Dela plats</button>
-    <button class="btn btn-ghost" id="skipLoc">Hoppa över, jag skriver in ort själv</button>
+    <div class="loc-or">eller</div>
+    <div class="loc-search-row">
+      <input type="text" class="text-input" id="manualLocInput" placeholder="Skriv en adress, plats eller stad" aria-label="Skriv in en plats">
+      <button class="btn btn-primary btn-search" id="manualLocBtn" type="button">Sök</button>
+    </div>
+    <p class="loc-status" id="manualLocStatus"></p>
   `;
   document.getElementById('locBtn').addEventListener('click', requestLocation);
-  document.getElementById('skipLoc').addEventListener('click', () => { state.coords = null; state.step++; render(); });
+
+  const input = document.getElementById('manualLocInput');
+  const status = document.getElementById('manualLocStatus');
+
+  function submitManualLocation(){
+    const query = input.value.trim();
+    if(!query) return;
+    searchManualLocation(query, status);
+  }
+
+  document.getElementById('manualLocBtn').addEventListener('click', submitManualLocation);
+  input.addEventListener('keydown', (e) => {
+    if(e.key === 'Enter'){ e.preventDefault(); submitManualLocation(); }
+  });
 }
 
 function requestLocation(){
@@ -817,6 +854,41 @@ function requestLocation(){
       setTimeout(() => { state.coords = null; state.step++; render(); }, 700);
     }
   );
+}
+
+// Låter användaren skriva in valfri plats (adress, stadsdel, ort) istället
+// för att dela GPS-position. Geokodas via Googles Geocoding API till
+// koordinater, som sedan används på exakt samma sätt som en delad GPS-plats
+// (PlacesProvider bryr sig bara om {lat,lng}).
+async function searchManualLocation(query, statusEl){
+  statusEl.classList.remove('err');
+  statusEl.textContent = "Söker efter platsen…";
+  try {
+    const coords = await geocodeAddress(query);
+    if(!coords){
+      statusEl.classList.add('err');
+      statusEl.textContent = "Hittade ingen plats som matchar — testa att skriva mer specifikt (t.ex. gatuadress + stad).";
+      return;
+    }
+    state.coords = coords;
+    statusEl.textContent = "Plats hittad ✓";
+    setTimeout(() => { state.step++; render(); }, 400);
+  } catch(err){
+    console.error("matchymatchy: geokodning misslyckades", err);
+    statusEl.classList.add('err');
+    statusEl.textContent = "Kunde inte slå upp platsen just nu — kontrollera anslutningen och försök igen.";
+  }
+}
+
+async function geocodeAddress(query){
+  if(!CONFIG.GOOGLE_MAPS_API_KEY) return null;
+  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${CONFIG.GOOGLE_MAPS_API_KEY}`;
+  const res = await fetch(url);
+  if(!res.ok) return null;
+  const data = await res.json();
+  if(data.status !== "OK" || !data.results || !data.results.length) return null;
+  const loc = data.results[0].geometry.location;
+  return { lat: loc.lat, lng: loc.lng };
 }
 
 function renderSingleChoiceStep({ eyebrow, title, lead, options, field, buttonLabel }){
@@ -913,13 +985,30 @@ function renderBudget(){
   });
 }
 
+const RADIUS_MIN = 0.5;
+const RADIUS_MAX = 50;
+
+// Svensk decimalkomma, och inga onödiga decimaler på jämna tal (t.ex. "12 km"
+// istället för "12,0 km").
+function formatKm(km){
+  const rounded = Math.round(km * 10) / 10;
+  const text = Number.isInteger(rounded) ? String(rounded) : rounded.toFixed(1).replace('.', ',');
+  return text + " km";
+}
+
+function radiusValueLabel(km){
+  if(km <= RADIUS_MIN) return "Max 0,5 km";
+  if(km >= RADIUS_MAX) return "Max 50 km";
+  return formatKm(km);
+}
+
 function renderRadius(){
   el.card.innerHTML = `
     <div class="eyebrow">Steg 3 · Sträcka</div>
     <h1>Hur långt kan ni <em>tänkas gå?</em></h1>
     <p class="lead">Dra i reglaget för hur stort område vi ska scanna av.</p>
-    <input type="range" min="0.5" max="5" step="0.1" value="${state.radius}" id="radiusRange" aria-label="Sökradie i kilometer">
-    <div class="range-val"><span>0,5 km</span><b id="radiusVal">${state.radius.toFixed(1)} km</b><span>5 km</span></div>
+    <input type="range" min="${RADIUS_MIN}" max="${RADIUS_MAX}" step="0.5" value="${state.radius}" id="radiusRange" aria-label="Sökradie i kilometer">
+    <div class="range-val"><span>0,5 km</span><b id="radiusVal">${radiusValueLabel(state.radius)}</b><span>50 km</span></div>
     <div class="spacer"></div>
     <button class="btn btn-primary" id="nextBtn">Nästa</button>
   `;
@@ -927,7 +1016,7 @@ function renderRadius(){
   const valEl = document.getElementById('radiusVal');
   range.addEventListener('input', () => {
     state.radius = parseFloat(range.value);
-    valEl.textContent = state.radius.toFixed(1) + " km";
+    valEl.textContent = radiusValueLabel(state.radius);
   });
   document.getElementById('nextBtn').addEventListener('click', () => { state.step++; render(); });
 }
@@ -935,14 +1024,14 @@ function renderRadius(){
 function renderAdventure(){
   renderSingleChoiceStep({
     eyebrow: "Steg 4 · Stämning",
-    title: "Är ni <em>äventyrliga?</em>",
-    lead: "Det hjälper oss välja mellan säkra kort och udda pärlor.",
+    title: "Beprövat, <em>eller nåt nytt?</em>",
+    lead: "Det avgör om vi föreslår säkra favoriter eller mer oprövade pärlor.",
     field: "adventure",
     buttonLabel: state.mode === 'tonight' ? "Planera kvällen" : (state.mode === 'date' ? "Hitta dejtställen" : "Hitta matchningar"),
     options: [
-      {v:1,l:"Klassiskt", d:"Vi vet vad vi gillar"},
-      {v:3,l:"Lagom nyfikna", d:"Gärna något nytt, inom rimliga gränser"},
-      {v:5,l:"Äventyrliga", d:"Överraska oss gärna"}
+      {v:1,l:"Hellre säkert", d:"Nåt vi vet att vi gillar"},
+      {v:3,l:"Gärna lite nytt", d:"Inom rimliga gränser"},
+      {v:5,l:"Överraska oss", d:"Ta gärna en chansning"}
     ]
   });
 }
@@ -1104,7 +1193,7 @@ function peopleRowHtml(p, i){
   </div>`;
 }
 function budgetLabelShort(v){ return {1:"€",2:"€€",3:"€€€",4:"€€€€"}[v] || "–"; }
-function advLabelShort(v){ return {1:"Klassiskt",3:"Lagom",5:"Äventyrligt"}[v] || "–"; }
+function advLabelShort(v){ return {1:"Säkert",3:"Lite nytt",5:"Överraska"}[v] || "–"; }
 
 function renderGroupPeople(){
   const draft = state.groupDraft;
@@ -1123,7 +1212,7 @@ function renderGroupPeople(){
     </div>
     <div class="field-label">Stämning</div>
     <div class="pill-row" id="draftAdv">
-      ${[{v:1,l:"Klassiskt"},{v:3,l:"Lagom"},{v:5,l:"Äventyrligt"}].map(o=>`<div class="pill${draft.adventure===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
+      ${[{v:1,l:"Säkert"},{v:3,l:"Lite nytt"},{v:5,l:"Överraska"}].map(o=>`<div class="pill${draft.adventure===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
     </div>
     <button class="btn btn-ghost" id="addPersonBtn" style="border:1px solid var(--line); border-radius:12px; margin-top:8px;" ${draft.budget && draft.adventure ? '' : 'disabled'}>+ Lägg till person</button>
 
@@ -1319,7 +1408,7 @@ FLOWS = {
     matcher: computeMatches,
     resultRenderer: renderResults,
     loadingMessages: (s) => [
-      `Analyserar platser inom ${s.radius.toFixed(1)} km…`,
+      `Analyserar platser inom ${formatKm(s.radius)}…`,
       "Jämför med er budget…",
       "Väger in äventyrsfaktorn…",
       "Rankar bästa matchningarna…"
@@ -1356,7 +1445,7 @@ FLOWS = {
     matcher: computeDateMatches,
     resultRenderer: renderResults,
     loadingMessages: (s) => [
-      `Analyserar platser inom ${s.radius.toFixed(1)} km…`,
+      `Analyserar platser inom ${formatKm(s.radius)}…`,
       "Letar efter mysiga hörn…",
       "Väger in stämningen…",
       "Rankar bästa dejtställena…"
