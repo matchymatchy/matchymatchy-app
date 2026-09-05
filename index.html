@@ -427,6 +427,21 @@ function tagBonus(p, tagList){
   return Math.min(1, hits * 0.5);
 }
 
+// Lägen som inte har ett eget platssteg (Spontant, Med vänner, Fikapaus)
+// behöver ändå koordinater för att kunna använda riktig Google-data.
+// Detta ber om plats i bakgrunden, utan en egen skärm, med kort timeout
+// så flödet aldrig känns långsammare än innan.
+function quickLocation(timeoutMs = 4000){
+  return new Promise(resolve => {
+    if(!navigator.geolocation){ resolve(null); return; }
+    navigator.geolocation.getCurrentPosition(
+      pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
+      () => resolve(null),
+      { timeout: timeoutMs }
+    );
+  });
+}
+
 // Litet stjärnbetyg i matchymatchys egen stil (inte kopplat till någon
 // tredjepartstjänst). Byt "rating"/"reviews" i MOCK_PLACES mot riktiga
 // recensioner när ni kopplar på live-data.
@@ -910,6 +925,7 @@ async function computeSpontaneousMatches(state){
   state.budgetAmount = budgetAmounts[state.budget];
   state.radius = radii[Math.floor(Math.random()*radii.length)];
   state.adventure = adventures[Math.floor(Math.random()*adventures.length)];
+  if(!state.coords) state.coords = await quickLocation();
 
   return computeMatches(state);
 }
@@ -988,6 +1004,7 @@ async function computeGroupMatches(state){
   state.budgetAmount = { 1:150, 2:400, 3:1200 }[state.budget];
   state.radius = state.radius || 3;
   state.groupSize = people.length;
+  if(!state.coords) state.coords = await quickLocation();
 
   return computeMatches(state);
 }
@@ -1117,6 +1134,7 @@ function renderFikaIntro(){
 }
 
 async function computeFikaMatches(state){
+  if(!state.coords) state.coords = await quickLocation();
   const places = await PlacesProvider.getPlaces({
     coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
   });
