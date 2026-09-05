@@ -393,21 +393,36 @@ const PlacesProvider = (() => {
   async function fetchLive(criteria){
     if(!CONFIG.GOOGLE_MAPS_API_KEY){
       console.warn("matchymatchy: GOOGLE_MAPS_API_KEY saknas, faller tillbaka på fejkad data.");
+      if(el.dataNote) el.dataNote.textContent = "Ingen Google-nyckel konfigurerad — visar exempeldata, avstånden är inte riktiga.";
       return fetchMock(criteria);
     }
     if(!criteria.coords){
       // Nearby Search kräver en position — om användaren hoppade över
       // "dela plats" har vi inget att söka runt, så vi faller tillbaka.
+      // Detta syns nu tydligt för användaren (istället för att tyst visa
+      // fejkade avstånd som om de vore riktiga) via dataNote-raden.
       console.warn("matchymatchy: ingen plats delad, faller tillbaka på fejkad data.");
+      if(el.dataNote) el.dataNote.textContent = "Ingen plats delad — visar exempeldata, avstånden är inte riktiga.";
       return fetchMock(criteria);
     }
 
     const body = {
-      includedTypes: ["restaurant", "bar", "cafe"],
-      // Snabbmatskedjor (McDonald's, KFC m.fl.) klassas av Google som just
-      // dessa typer — utesluts helt här så de aldrig kan dyka upp som förslag,
-      // oavsett vad poängsättningen längre ner skulle landa i.
-      excludedPrimaryTypes: ["fast_food_restaurant", "meal_takeaway", "meal_delivery"],
+      // "includedTypes" matchar mot HELA platsens typ-lista, vilket är
+      // varför t.ex. en saluhall (en marknad som har "restaurant" som en
+      // av flera taggar, inte sin faktiska huvudkategori) kunde smyga sig
+      // in som förslag. "includedPrimaryTypes" matchar bara mot platsens
+      // FAKTISKA huvudkategori och är betydligt mer träffsäkert.
+      includedPrimaryTypes: ["restaurant", "bar", "cafe"],
+      // Snabbmat, matbutiker, boenden och bensinmackar klassas av Google
+      // som egna primärtyper — utesluts helt här så de aldrig kan dyka upp
+      // som förslag, oavsett vad poängsättningen längre ner skulle landa i.
+      excludedPrimaryTypes: [
+        "fast_food_restaurant", "meal_takeaway", "meal_delivery",
+        "sandwich_shop", "food_court", "deli",
+        "lodging", "hostel", "hotel", "motel", "resort_hotel", "campground", "rv_park",
+        "gas_station", "convenience_store", "supermarket", "grocery_store",
+        "department_store", "shopping_mall", "market"
+      ],
       maxResultCount: 20,
       locationRestriction: {
         circle: {
@@ -436,7 +451,9 @@ const PlacesProvider = (() => {
     const data = await res.json();
 
     // Mappa Google-formatet till appens interna plats-form.
-    return (data.places || []).map(p => {
+    return (data.places || [])
+      .filter(p => isLegitRestaurantResult(p))
+      .map(p => {
       // primaryType/primaryTypeDisplayName är Googles egna, avsedda fält för
       // "vad är det här stället egentligen" — till skillnad från "types",
       // som är en oordnad lista och INTE ska tolkas som types[0] = huvudtyp.
@@ -459,6 +476,30 @@ const PlacesProvider = (() => {
         placeId: p.id || null
       };
     });
+  }
+
+  // Extra säkerhetsnät utöver includedPrimaryTypes/excludedPrimaryTypes i
+  // själva anropet: Googles typdata är inte alltid konsekvent (en kedja
+  // kan t.ex. ibland vara taggad "restaurant" som huvudtyp trots att den
+  // egentligen är snabbmat). Dubbelkollar därför primaryType mot samma
+  // uteslutningslista lokalt, plus namnet mot kända snabbmatskedjor, så en
+  // felmärkt träff ändå inte slinker igenom.
+  const HARD_EXCLUDED_TYPES = new Set([
+    "fast_food_restaurant", "meal_takeaway", "meal_delivery",
+    "sandwich_shop", "food_court", "deli",
+    "lodging", "hostel", "hotel", "motel", "resort_hotel", "campground", "rv_park",
+    "gas_station", "convenience_store", "supermarket", "grocery_store",
+    "department_store", "shopping_mall", "market"
+  ]);
+  const KNOWN_FAST_FOOD_NAMES = [
+    "mcdonald", "max hamburgare", "burger king", "kfc", "sibylla",
+    "subway", "taco bell", "o'learys", "pizza hut", "dominos", "domino's"
+  ];
+  function isLegitRestaurantResult(p){
+    if(p.primaryType && HARD_EXCLUDED_TYPES.has(p.primaryType)) return false;
+    const name = (p.displayName?.text || "").toLowerCase();
+    if(KNOWN_FAST_FOOD_NAMES.some(n => name.includes(n))) return false;
+    return true;
   }
 
   function mapGooglePriceLevel(level){
@@ -612,6 +653,23 @@ function scoreWithVibe(p, state, vibeWeight = 0.25){
   return base * (1 - vibeWeight) + tagBonus(p, state.vibeTags) * vibeWeight;
 }
 
+// Plockar ut de N bästa ur en redan poängsatt+sorterad lista, men hoppar
+// över ställen som redan visats i det här sökpasset (state.seenNames) —
+// det är det som gör att "Sök igen" ger nya alternativ istället för att
+// visa exakt samma kort igen. Om för få ovisade ställen finns kvar (t.ex.
+// när man klickat "Sök igen" så många gånger att alla har visats) börjar
+// vi om cykeln istället för att fastna på ett tomt resultat.
+function pickUnseen(sortedPlaces, state, n = 3){
+  let pool = sortedPlaces.filter(p => !state.seenNames.includes(p.name));
+  if(pool.length < n){
+    state.seenNames = [];
+    pool = sortedPlaces;
+  }
+  const picked = pool.slice(0, n);
+  picked.forEach(p => { if(!state.seenNames.includes(p.name)) state.seenNames.push(p.name); });
+  return picked;
+}
+
 async function computeMatches(state){
   const places = await PlacesProvider.getPlaces({
     coords: state.coords,
@@ -630,10 +688,11 @@ async function computeMatches(state){
     candidates = places.filter(p => p.price === 4);
   }
 
-  return candidates
+  const sorted = candidates
     .map(p => ({ ...p, score: scoreWithVibe(p, state) }))
-    .sort((a,b) => b.score - a.score)
-    .slice(0, 3);
+    .sort((a,b) => b.score - a.score);
+
+  return pickUnseen(sorted, state);
 }
 
 /* =========================================================================
@@ -650,7 +709,11 @@ const state = {
   // Steg 4 · Vibe: antingen en förvald preset ("preset") eller en egen
   // text som tolkats av analyzeVibeText() ("custom"). vibeTags används av
   // scoreWithVibe()/tagBonus() för att vikta matchningarna.
-  vibeSource: null, vibeId: null, vibeLabel: '', vibeTags: [], customVibeText: ''
+  vibeSource: null, vibeId: null, vibeLabel: '', vibeTags: [], customVibeText: '',
+  // Namn på ställen som redan visats i det här sökpasset — används av
+  // "Sök igen" så en omsökning med samma svar ger NYA alternativ istället
+  // för att visa exakt samma tre igen.
+  seenNames: []
 };
 
 const el = {
@@ -750,6 +813,7 @@ function goHome(){
   state.groupSize = 0;
   state.showFavorites = false;
   state.vibeSource = null; state.vibeId = null; state.vibeLabel = ''; state.vibeTags = []; state.customVibeText = '';
+  state.seenNames = [];
   el.card.style.minHeight = '380px';
   render();
 }
@@ -787,6 +851,7 @@ function switchMode(mode){
   state.groupDraft = { budget: null, adventure: null };
   state.groupSize = 0;
   state.vibeSource = null; state.vibeId = null; state.vibeLabel = ''; state.vibeTags = []; state.customVibeText = '';
+  state.seenNames = [];
   el.card.style.minHeight = '380px';
   render();
 }
@@ -818,7 +883,6 @@ const HOME_MODE_INFO = {
 function renderHome(){
   el.card.style.minHeight = '380px';
   el.card.innerHTML = `
-    <div class="hero-badge">✨ Slut på att bläddra</div>
     <h1>Hitta något att göra <em>på sekunder</em></h1>
     <p class="lead">matchymatchy scannar det som finns nära er och föreslår tre ställen som faktiskt passar — inga oändliga listor att skrolla igenom.</p>
     <button class="btn btn-primary" id="startNowBtn">Kom igång</button>
@@ -907,10 +971,11 @@ function renderLocation(){
 
 function requestLocation(){
   const status = document.getElementById('locStatus');
+  status.classList.remove('err');
   status.textContent = "Söker din plats…";
   if(!navigator.geolocation){
-    status.textContent = "Kunde inte hitta plats — går vidare ändå";
-    setTimeout(() => { state.step++; render(); }, 700);
+    status.classList.add('err');
+    status.textContent = "Din enhet stödjer inte platsdelning — skriv in en adress eller ett ställe nedan istället.";
     return;
   }
   navigator.geolocation.getCurrentPosition(
@@ -920,8 +985,12 @@ function requestLocation(){
       setTimeout(() => { state.step++; render(); }, 500);
     },
     () => {
-      status.textContent = "Ingen åtkomst — går vidare ändå";
-      setTimeout(() => { state.coords = null; state.step++; render(); }, 700);
+      // Går INTE vidare automatiskt här längre — annars kunde man hamna i
+      // nästa steg utan riktiga koordinater, vilket gjorde att förslagen
+      // tyst föll tillbaka på exempeldata med hittepå-avstånd som såg ut
+      // som riktiga. Be istället om en adress, så avstånden alltid stämmer.
+      status.classList.add('err');
+      status.textContent = "Ingen åtkomst till din plats — skriv in en adress eller ett ställe nedan istället.";
     }
   );
 }
@@ -1431,6 +1500,13 @@ function renderResults(matches){
     });
   });
 
+  const searchAgainBtn = document.createElement('button');
+  searchAgainBtn.className = 'btn btn-primary';
+  searchAgainBtn.style.marginTop = '4px';
+  searchAgainBtn.textContent = 'Sök igen med samma val';
+  searchAgainBtn.addEventListener('click', () => render());
+  el.card.appendChild(searchAgainBtn);
+
   const restartBtn = document.createElement('button');
   restartBtn.className = 'btn btn-ghost';
   restartBtn.style.marginTop = '4px';
@@ -1558,10 +1634,13 @@ async function computeEveningPlan(state){
   const places = await PlacesProvider.getPlaces({
     coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
   });
-  const bestInSlot = (slot) => places
-    .filter(p => p.slot === slot)
-    .map(p => ({ ...p, score: scoreWithVibe(p, state) }))
-    .sort((a,b) => b.score - a.score)[0] || null;
+  const bestInSlot = (slot) => {
+    const sorted = places
+      .filter(p => p.slot === slot)
+      .map(p => ({ ...p, score: scoreWithVibe(p, state) }))
+      .sort((a,b) => b.score - a.score);
+    return pickUnseen(sorted, state, 1)[0] || null;
+  };
 
   return {
     early: { time:"17:30", label:"Förfest", place: bestInSlot('early') },
@@ -1620,6 +1699,13 @@ function renderEveningPlan(plan){
     wrap.appendChild(row);
   });
 
+  const searchAgainBtn = document.createElement('button');
+  searchAgainBtn.className = 'btn btn-primary';
+  searchAgainBtn.style.marginTop = '10px';
+  searchAgainBtn.textContent = 'Sök igen med samma val';
+  searchAgainBtn.addEventListener('click', () => render());
+  el.card.appendChild(searchAgainBtn);
+
   const restartBtn = document.createElement('button');
   restartBtn.className = 'btn btn-ghost';
   restartBtn.style.marginTop = '6px';
@@ -1640,10 +1726,10 @@ async function computeDateMatches(state){
     coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
   });
   const bonusTags = [...DATE_BONUS_TAGS, ...(state.vibeTags || [])];
-  return places
+  const sorted = places
     .map(p => ({ ...p, score: scorePlace(p, state) * 0.75 + tagBonus(p, bonusTags) * 0.25 }))
-    .sort((a,b) => b.score - a.score)
-    .slice(0, 3);
+    .sort((a,b) => b.score - a.score);
+  return pickUnseen(sorted, state);
 }
 
 /* =========================================================================
@@ -1687,10 +1773,10 @@ async function computeFikaMatches(state){
     coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
   });
   const bonusTags = [...CHILL_BONUS_TAGS, ...(state.vibeTags || [])];
-  return places
+  const sorted = places
     .map(p => ({ ...p, score: scorePlace(p, state) * 0.7 + tagBonus(p, bonusTags) * 0.3 }))
-    .sort((a,b) => b.score - a.score)
-    .slice(0, 3);
+    .sort((a,b) => b.score - a.score);
+  return pickUnseen(sorted, state);
 }
 
 /* =========================================================================
