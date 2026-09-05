@@ -813,20 +813,22 @@ function renderLocation(){
     <button class="btn btn-primary" id="locBtn">Dela plats</button>
     <div class="loc-or">eller</div>
     <div class="loc-search-row">
-      <input type="text" class="text-input" id="manualLocInput" placeholder="Skriv en adress, plats eller stad" aria-label="Skriv in en plats">
+      <input type="text" class="text-input" id="manualLocInput" placeholder="T.ex. hotellet du bor på, en adress eller en stad" aria-label="Skriv in en plats">
       <button class="btn btn-primary btn-search" id="manualLocBtn" type="button">Sök</button>
     </div>
     <p class="loc-status" id="manualLocStatus"></p>
+    <div class="choices" id="manualLocResults"></div>
   `;
   document.getElementById('locBtn').addEventListener('click', requestLocation);
 
   const input = document.getElementById('manualLocInput');
   const status = document.getElementById('manualLocStatus');
+  const results = document.getElementById('manualLocResults');
 
   function submitManualLocation(){
     const query = input.value.trim();
     if(!query) return;
-    searchManualLocation(query, status);
+    searchManualLocation(query, status, results);
   }
 
   document.getElementById('manualLocBtn').addEventListener('click', submitManualLocation);
@@ -856,39 +858,79 @@ function requestLocation(){
   );
 }
 
-// Låter användaren skriva in valfri plats (adress, stadsdel, ort) istället
-// för att dela GPS-position. Geokodas via Googles Geocoding API till
-// koordinater, som sedan används på exakt samma sätt som en delad GPS-plats
-// (PlacesProvider bryr sig bara om {lat,lng}).
-async function searchManualLocation(query, statusEl){
+// Låter användaren skriva in valfri plats — inte bara en gatuadress, utan
+// även namngivna ställen som ett hotell, en restaurang eller ett landmärke.
+// Geocoding API (adressuppslagning) förstod aldrig sånt, så vi använder
+// samma Places-sökning som resten av appen bygger på, fast i textsöknings-
+// läge. Visar upp till 5 träffar att välja bland, precis som Google gör.
+async function searchManualLocation(query, statusEl, resultsEl){
   statusEl.classList.remove('err');
   statusEl.textContent = "Söker efter platsen…";
+  resultsEl.innerHTML = '';
   try {
-    const coords = await geocodeAddress(query);
-    if(!coords){
+    const matches = await searchPlacesText(query);
+    if(!matches.length){
       statusEl.classList.add('err');
-      statusEl.textContent = "Hittade ingen plats som matchar — testa att skriva mer specifikt (t.ex. gatuadress + stad).";
+      statusEl.textContent = "Hittade inget som matchar — testa ett annat namn, eller lägg till stad.";
       return;
     }
-    state.coords = coords;
-    statusEl.textContent = "Plats hittad ✓";
-    setTimeout(() => { state.step++; render(); }, 400);
+    statusEl.textContent = matches.length === 1 ? "1 träff — bekräfta genom att välja den" : `${matches.length} träffar — välj rätt ställe`;
+    resultsEl.innerHTML = matches.map((m, i) => `
+      <div class="choice" tabindex="0" role="button" data-i="${i}">
+        <span>${m.name}</span><span class="tag">${m.address}</span>
+      </div>
+    `).join('');
+    function pick(target){
+      const m = matches[parseInt(target.dataset.i, 10)];
+      state.coords = { lat: m.lat, lng: m.lng };
+      statusEl.classList.remove('err');
+      statusEl.textContent = `Vald plats: ${m.name} ✓`;
+      resultsEl.innerHTML = '';
+      setTimeout(() => { state.step++; render(); }, 350);
+    }
+    resultsEl.querySelectorAll('.choice').forEach(el => {
+      el.addEventListener('click', () => pick(el));
+      el.addEventListener('keydown', (e) => {
+        if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); pick(el); }
+      });
+    });
   } catch(err){
-    console.error("matchymatchy: geokodning misslyckades", err);
+    console.error("matchymatchy: platssökning misslyckades", err);
     statusEl.classList.add('err');
-    statusEl.textContent = "Kunde inte slå upp platsen just nu — kontrollera anslutningen och försök igen.";
+    statusEl.textContent = "Kunde inte söka just nu — kontrollera anslutningen och försök igen.";
   }
 }
 
-async function geocodeAddress(query){
-  if(!CONFIG.GOOGLE_MAPS_API_KEY) return null;
-  const url = `https://maps.googleapis.com/maps/api/geocode/json?address=${encodeURIComponent(query)}&key=${CONFIG.GOOGLE_MAPS_API_KEY}`;
-  const res = await fetch(url);
-  if(!res.ok) return null;
+// Places Text Search (New) — samma API-familj som PlacesProvider.fetchLive
+// använder för själva förslagen, men i fritextläge. Till skillnad från
+// Geocoding API förstår den namngivna ställen (hotell, restauranger,
+// landmärken) och inte bara gatuadresser.
+async function searchPlacesText(query){
+  if(!CONFIG.GOOGLE_MAPS_API_KEY) return [];
+  const res = await fetch("https://places.googleapis.com/v1/places:searchText", {
+    method: "POST",
+    headers: {
+      "Content-Type": "application/json",
+      "X-Goog-Api-Key": CONFIG.GOOGLE_MAPS_API_KEY,
+      "X-Goog-FieldMask": "places.displayName,places.formattedAddress,places.location"
+    },
+    body: JSON.stringify({
+      textQuery: query,
+      maxResultCount: 5,
+      languageCode: "sv",
+      regionCode: "SE"
+    })
+  });
+  if(!res.ok) throw new Error("Places textsökning misslyckades: " + res.status);
   const data = await res.json();
-  if(data.status !== "OK" || !data.results || !data.results.length) return null;
-  const loc = data.results[0].geometry.location;
-  return { lat: loc.lat, lng: loc.lng };
+  return (data.places || [])
+    .map(p => ({
+      name: p.displayName?.text || "Okänt namn",
+      address: p.formattedAddress || "",
+      lat: p.location?.latitude,
+      lng: p.location?.longitude
+    }))
+    .filter(p => typeof p.lat === "number" && typeof p.lng === "number");
 }
 
 function renderSingleChoiceStep({ eyebrow, title, lead, options, field, buttonLabel }){
