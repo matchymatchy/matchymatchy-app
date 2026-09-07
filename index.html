@@ -557,7 +557,7 @@ const PlacesProvider = (() => {
 
     // Mappa Google-formatet till appens interna plats-form.
     return (data.places || [])
-      .filter(p => isLegitRestaurantResult(p))
+      .filter(p => !isWrongCategory(p))
       .map(p => {
       // primaryType/primaryTypeDisplayName är Googles egna, avsedda fält för
       // "vad är det här stället egentligen" — till skillnad från "types",
@@ -584,33 +584,56 @@ const PlacesProvider = (() => {
         reviews: p.userRatingCount || 0,
         lat: p.location.latitude,
         lng: p.location.longitude,
-        placeId: p.id || null
+        placeId: p.id || null,
+        // Flaggar snabbmatskedjor för scorePlace() istället för att
+        // plocka bort dem helt — de ska kunna dyka upp ibland, bara inte
+        // ofta eller högt rankade (se isQuickServiceChain nedan).
+        isChain: isQuickServiceChain(p)
       };
     });
   }
 
-  // Extra säkerhetsnät utöver includedPrimaryTypes/excludedPrimaryTypes i
-  // själva anropet: Googles typdata är inte alltid konsekvent (en kedja
-  // kan t.ex. ibland vara taggad "restaurant" som huvudtyp trots att den
-  // egentligen är snabbmat). Dubbelkollar därför primaryType mot samma
-  // uteslutningslista lokalt, plus namnet mot kända snabbmatskedjor, så en
-  // felmärkt träff ändå inte slinker igenom.
-  const HARD_EXCLUDED_TYPES = new Set([
-    "fast_food_restaurant", "meal_takeaway", "meal_delivery",
-    "sandwich_shop", "food_court", "deli",
+  // Kategorier som ALDRIG är en rimlig träff på "restaurang/bar/café",
+  // oavsett stämning — boenden, bensinmackar, mataffärer och köpcenter.
+  // Det här är ingen smaksak att mjuka upp, så det förblir ett hårt filter
+  // (till skillnad från snabbmatskedjor, se isQuickServiceChain).
+  const WRONG_CATEGORY_TYPES = new Set([
     "lodging", "hostel", "hotel", "motel", "resort_hotel", "campground", "rv_park",
     "gas_station", "convenience_store", "supermarket", "grocery_store",
     "department_store", "shopping_mall", "market"
   ]);
-  const KNOWN_FAST_FOOD_NAMES = [
-    "mcdonald", "max hamburgare", "burger king", "kfc", "sibylla",
-    "subway", "taco bell", "o'learys", "pizza hut", "dominos", "domino's"
+  function isWrongCategory(p){
+    return !!(p.primaryType && WRONG_CATEGORY_TYPES.has(p.primaryType));
+  }
+
+  // Typer som starkt indikerar snabbmat/kedja. Kollas mot BÅDA primaryType
+  // (Googles huvudkategori) OCH hela types-listan — det senare är viktigt,
+  // eftersom Google ofta sätter den generiska "restaurant" som primaryType
+  // för en kedja men ändå listar t.ex. "fast_food_restaurant" eller
+  // "hamburger_restaurant" som en av flera typer i types-arrayen. Ett
+  // filter som bara kollar primaryType (som tidigare) missar de fallen.
+  const QUICK_SERVICE_TYPES = new Set([
+    "fast_food_restaurant", "meal_takeaway", "meal_delivery",
+    "sandwich_shop", "food_court", "deli", "hamburger_restaurant"
+  ]);
+
+  // Kända kedjenamn som Google ofta klassar för löst (primaryType/types
+  // säger bara "restaurant"). \b (ordgräns) används för korta, tvetydiga
+  // namn som "max" — annars hade t.ex. ett ställe med "Maxine's" i namnet
+  // kunnat träffas av misstag. OBS: tidigare letade filtret efter texten
+  // "max hamburgare", men Google listar kedjan bara som "MAX" — det var
+  // därför den slank igenom trots att den fanns med i listan.
+  const KNOWN_CHAIN_NAME_PATTERNS = [
+    /\bmax\b/, /mcdonald/, /burger\s*king/, /\bkfc\b/, /sibylla/,
+    /\bsubway\b/, /taco\s*bell/, /taco\s*bar/, /pizza\s*hut/, /domino'?s/,
+    /7-?eleven|seven\s*eleven/
   ];
-  function isLegitRestaurantResult(p){
-    if(p.primaryType && HARD_EXCLUDED_TYPES.has(p.primaryType)) return false;
+
+  function isQuickServiceChain(p){
+    if(p.primaryType && QUICK_SERVICE_TYPES.has(p.primaryType)) return true;
+    if(Array.isArray(p.types) && p.types.some(t => QUICK_SERVICE_TYPES.has(t))) return true;
     const name = (p.displayName?.text || "").toLowerCase();
-    if(KNOWN_FAST_FOOD_NAMES.some(n => name.includes(n))) return false;
-    return true;
+    return KNOWN_CHAIN_NAME_PATTERNS.some(re => re.test(name));
   }
 
   function mapGooglePriceLevel(level){
@@ -721,7 +744,13 @@ function scorePlace(p, state){
   const priceScore = 1 - (Math.abs(p.price - state.budget) / 3);
   const distScore = p.dist <= state.radius ? 1 : Math.max(0, 1 - ((p.dist - state.radius) / 2));
   const advScore = 1 - (Math.abs(p.adv - state.adventure) / 4);
-  return priceScore*0.4 + distScore*0.35 + advScore*0.25;
+  const score = priceScore*0.4 + distScore*0.35 + advScore*0.25;
+  // Snabbmatskedjor (Max, McDonald's, KFC m.fl.) blockeras inte längre
+  // helt — de kan fortfarande dyka upp om inget bättre finns i närheten —
+  // men får ett rejält poängavdrag så de sällan konkurrerar på lika
+  // villkor med "riktiga" restauranger/barer/caféer och nästan aldrig
+  // hamnar högst upp om det finns bättre alternativ.
+  return p.isChain ? score * 0.45 : score;
 }
 
 // Ger bonuspoäng till platser vars taggar matchar en lista — används av
