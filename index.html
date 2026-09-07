@@ -408,6 +408,14 @@
   .fav-btn.active{ background: rgba(255,107,91,0.18); color: var(--accent); }
   .fav-btn:active{ transform: scale(0.9); }
 
+  .exclude-btn{
+    border:none; background:rgba(251,243,233,0.08); color: var(--muted);
+    width:32px; height:32px; border-radius:50%; font-size:14px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center; flex-shrink:0; transition: all .15s ease;
+  }
+  .exclude-btn:hover, .exclude-btn:focus-visible{ background: rgba(255,143,143,0.18); color: var(--danger); }
+  .exclude-btn:active{ transform: scale(0.9); }
+
   .fav-empty{ color: var(--muted); font-size:14px; text-align:center; padding: 30px 0; }
   .fav-list-item{
     display:flex; align-items:center; justify-content:space-between; gap:10px;
@@ -563,14 +571,14 @@ const PlacesProvider = (() => {
   // fetchLive() för hur det byts mot riktiga recensioner (t.ex. Google
   // Places har ett "rating"-fält redan inritat där).
   const MOCK_PLACES = [
-    {name:"Barrio Nio", type:"Gatukökskrog · Sydamerikanskt", price:1, dist:0.8, adv:2, tags:["Prisvärt","Livlig stämning"], trait:"deras husgjorda chili-sås som stamgästerna pratar om", slot:"main", rating:4.6, reviews:312},
-    {name:"Rök & Lin", type:"Bar · Naturviner", price:2, dist:1.6, adv:3, tags:["Mysigt","Bra för samtal"], trait:"en handplockad vinlista som byts varje vecka", slot:"late", rating:4.8, reviews:189},
-    {name:"Höjden 12", type:"Takbar", price:3, dist:2.4, adv:4, tags:["Utsikt","Datevänligt"], trait:"panoramautsikt över hela stan från åttonde våningen", slot:"late", rating:4.4, reviews:501},
-    {name:"Grus & Grönt", type:"Vegetariskt kök", price:2, dist:1.1, adv:2, tags:["Hälsosamt","Lugnt"], trait:"en meny som byggs helt efter dagens skörd", slot:"main", rating:4.7, reviews:96},
-    {name:"Kajplats 4", type:"Fiskrestaurang · Hamnen", price:3, dist:3.2, adv:3, tags:["Romantiskt","Havsnära"], trait:"råvaror som kommer direkt från morgonens fångst", slot:"main", rating:4.5, reviews:220},
-    {name:"Underjorden", type:"Speakeasy-bar", price:2, dist:2.0, adv:5, tags:["Hemlig entré","Äventyrligt"], trait:"en dold ingång bakom en gammal telefonkiosk", slot:"late", rating:4.9, reviews:143},
-    {name:"Smulan", type:"Bakverk & kaffe", price:1, dist:0.5, adv:1, tags:["Prisvärt","Avslappnat"], trait:"kanelbullar som säljer slut innan lunch", slot:"early", rating:4.3, reviews:267},
-    {name:"Fabriken 7", type:"Industribar · Craft beer", price:2, dist:2.8, adv:4, tags:["Högt i tak","Socialt"], trait:"tolv fatöl som bryggs i lokalen bakom disken", slot:"late", rating:4.6, reviews:178}
+    {name:"Barrio Nio", type:"Gatukökskrog · Sydamerikanskt", price:1, dist:0.8, adv:2, tags:["Prisvärt","Livlig stämning"], trait:"deras husgjorda chili-sås som stamgästerna pratar om", slot:"main", rating:4.6, reviews:312, openNow:true},
+    {name:"Rök & Lin", type:"Bar · Naturviner", price:2, dist:1.6, adv:3, tags:["Mysigt","Bra för samtal"], trait:"en handplockad vinlista som byts varje vecka", slot:"late", rating:4.8, reviews:189, openNow:true},
+    {name:"Höjden 12", type:"Takbar", price:3, dist:2.4, adv:4, tags:["Utsikt","Datevänligt"], trait:"panoramautsikt över hela stan från åttonde våningen", slot:"late", rating:4.4, reviews:501, openNow:false},
+    {name:"Grus & Grönt", type:"Vegetariskt kök", price:2, dist:1.1, adv:2, tags:["Hälsosamt","Lugnt"], trait:"en meny som byggs helt efter dagens skörd", slot:"main", rating:4.7, reviews:96, vegetarian:true, openNow:true},
+    {name:"Kajplats 4", type:"Fiskrestaurang · Hamnen", price:3, dist:3.2, adv:3, tags:["Romantiskt","Havsnära"], trait:"råvaror som kommer direkt från morgonens fångst", slot:"main", rating:4.5, reviews:220, openNow:true},
+    {name:"Underjorden", type:"Speakeasy-bar", price:2, dist:2.0, adv:5, tags:["Hemlig entré","Äventyrligt"], trait:"en dold ingång bakom en gammal telefonkiosk", slot:"late", rating:4.9, reviews:143, openNow:true},
+    {name:"Smulan", type:"Bakverk & kaffe", price:1, dist:0.5, adv:1, tags:["Prisvärt","Avslappnat"], trait:"kanelbullar som säljer slut innan lunch", slot:"early", rating:4.3, reviews:267, openNow:false},
+    {name:"Fabriken 7", type:"Industribar · Craft beer", price:2, dist:2.8, adv:4, tags:["Högt i tak","Socialt"], trait:"tolv fatöl som bryggs i lokalen bakom disken", slot:"late", rating:4.6, reviews:178, openNow:true}
   ];
 
   // criteria: { coords: {lat,lng}|null, radiusKm, budget, adventure }
@@ -677,6 +685,10 @@ const PlacesProvider = (() => {
         lat: p.location.latitude,
         lng: p.location.longitude,
         placeId: p.id || null,
+        // Separat booleskt fält (utöver "Hälsosamt"-taggen ovan) — det är
+        // det här filterVegetarian()/vegetarianOnly-togglen faktiskt kollar,
+        // så filtreringen inte råkar bli beroende av hur taggen visas.
+        vegetarian: !!p.servesVegetarianFood,
         // "openNow" tas från currentOpeningHours i första hand (tar hänsyn
         // till tillfälliga avvikelser som helgdagar); faller tillbaka på
         // regularOpeningHours om den saknas. null = Google gav ingen
@@ -847,27 +859,37 @@ function scorePlace(p, state){
   const priceScore = 1 - (Math.abs(p.price - state.budget) / 3);
   const distScore = p.dist <= state.radius ? 1 : Math.max(0, 1 - ((p.dist - state.radius) / 2));
   const advScore = 1 - (Math.abs(p.adv - state.adventure) / 4);
-  const score = priceScore*0.4 + distScore*0.35 + advScore*0.25;
+  let score = priceScore*0.4 + distScore*0.35 + advScore*0.25;
   // Snabbmatskedjor (Max, McDonald's, KFC m.fl.) blockeras inte längre
   // helt — de kan fortfarande dyka upp om inget bättre finns i närheten —
   // men får ett rejält poängavdrag så de sällan konkurrerar på lika
   // villkor med "riktiga" restauranger/barer/caféer och nästan aldrig
   // hamnar högst upp om det finns bättre alternativ.
-  return p.isChain ? score * 0.45 : score;
+  if(p.isChain) score *= 0.45;
+  // Samma idé för stängda ställen: vi filtrerar inte bort dem helt som
+  // standard (openNow kan saknas/vara null, och ett stängt ställe kan ändå
+  // vara "rätt" om inget annat finns) — men de nedprioriteras rejält så de
+  // nästan aldrig konkurrerar ut ett öppet ställe. Den som vill garanterat
+  // slippa stängda ställen kryssar i "Bara öppna nu" i steg 3, vilket
+  // filtrerar bort dem helt innan poängsättningen ens körs (se
+  // applyPracticalFilters).
+  if(p.openNow === false) score *= 0.35;
+  return score;
 }
 
 // Ger bonuspoäng till platser vars taggar matchar en lista — används av
-// t.ex. "Dejt"-läget (romantiska taggar) och "Fikapaus" (lugna taggar) för
-// att vikta matchningarna mot rätt känsla, utöver den vanliga scorePlace.
+// t.ex. "Dejt"-läget (romantiska taggar) och den fritt tolkade vibe-texten
+// i steg 4 för att vikta matchningarna mot rätt känsla, utöver den vanliga
+// scorePlace.
 function tagBonus(p, tagList){
   const hits = p.tags.filter(t => tagList.includes(t)).length;
   return Math.min(1, hits * 0.5);
 }
 
-// Lägen som inte har ett eget platssteg (Spontant, Med vänner, Fikapaus)
-// behöver ändå koordinater för att kunna använda riktig Google-data.
-// Detta ber om plats i bakgrunden, utan en egen skärm, med kort timeout
-// så flödet aldrig känns långsammare än innan.
+// Lägen som inte har ett eget platssteg (Spontant, Med vänner) behöver
+// ändå koordinater för att kunna använda riktig Google-data. Detta ber om
+// plats i bakgrunden, utan en egen skärm, med kort timeout så flödet
+// aldrig känns långsammare än innan.
 function quickLocation(timeoutMs = 9000){
   return new Promise(resolve => {
     if(!navigator.geolocation){ resolve(null); return; }
@@ -980,13 +1002,25 @@ function reasonFor(p, state){
 
 // Ger bonuspoäng mot förslag som matchar den vibe gänget valt (eller den
 // AI-tolkade egna vibe-texten) i steg 4 — ovanpå den vanliga scorePlace().
-// Fungerar precis som tagBonus/DATE_BONUS_TAGS/CHILL_BONUS_TAGS men styrs
+// Fungerar precis som tagBonus/DATE_BONUS_TAGS men styrs
 // av vad användaren faktiskt valde i vibe-steget istället för att vara
 // hårdkodat per läge.
 function scoreWithVibe(p, state, vibeWeight = 0.25){
   const base = scorePlace(p, state);
   if(!state.vibeTags || !state.vibeTags.length) return base;
   return base * (1 - vibeWeight) + tagBonus(p, state.vibeTags) * vibeWeight;
+}
+
+// Körs på RÅ platslistan innan poängsättning, i alla lägen. Tre filter i
+// tur och ordning: uteslutna ställen ("Inte för mig") tas alltid bort;
+// öppet-nu och vegetariskt/veganskt tas bara bort om respektive toggle i
+// steg 3 är påslagen (annars påverkar de bara poängen mjukt, se
+// scorePlace/openNow-avdraget).
+function applyPracticalFilters(places, state){
+  let result = filterExcluded(places);
+  if(state.openNowOnly) result = result.filter(p => p.openNow !== false);
+  if(state.vegetarianOnly) result = result.filter(p => p.vegetarian === true);
+  return result;
 }
 
 // Plockar ut de N bästa ur en redan poängsatt+sorterad lista, men hoppar
@@ -1017,11 +1051,11 @@ async function computeMatches(state){
   // Vid reglagets ändlägen filtrerar vi strikt på prisnivå istället för att
   // bara vikta den i poängen — annars skulle "över 2000 kr" ändå kunna visa
   // billiga ställen bara för att fylla ut till tre kort.
-  let candidates = places;
+  let candidates = applyPracticalFilters(places, state);
   if(isOpenEndedLow(state.budgetAmount)){
-    candidates = places.filter(p => p.price === 1);
+    candidates = candidates.filter(p => p.price === 1);
   } else if(isOpenEndedHigh(state.budgetAmount)){
-    candidates = places.filter(p => p.price === 4);
+    candidates = candidates.filter(p => p.price === 4);
   }
 
   const sorted = candidates
@@ -1043,6 +1077,12 @@ const state = {
   groupSize: 0,
   showFavorites: false,
   showAccount: false,
+  showExcluded: false,
+  // Steg 3 · Sträcka: praktiska filter utöver avstånd. Sparas som
+  // inställningar (se PREFS_KEY) precis som budget/radie, så valet finns
+  // kvar nästa gång — men påverkar bara lägen som faktiskt frågar om det.
+  openNowOnly: false,
+  vegetarianOnly: false,
   // Steg 4 · Vibe: antingen en förvald preset ("preset") eller en egen
   // text som tolkats av analyzeVibeText() ("custom"). vibeTags används av
   // scoreWithVibe()/tagBonus() för att vikta matchningarna.
@@ -1074,6 +1114,8 @@ function savePrefs(partial){
   if(typeof saved.budgetAmount === 'number') state.budgetAmount = saved.budgetAmount;
   if(typeof saved.radius === 'number') state.radius = saved.radius;
   if(typeof saved.adventure === 'number') state.adventure = saved.adventure;
+  if(typeof saved.openNowOnly === 'boolean') state.openNowOnly = saved.openNowOnly;
+  if(typeof saved.vegetarianOnly === 'boolean') state.vegetarianOnly = saved.vegetarianOnly;
 })();
 
 const el = {
@@ -1130,6 +1172,42 @@ function updateFavCount(){
 }
 
 /* =========================================================================
+   UTESLUTNA STÄLLEN ("Inte för mig")
+   Precis som favoriter, men tvärtom: ett ställe man tryckt bort dyker
+   aldrig upp som förslag igen (i något läge), tills man själv tar tillbaka
+   det i kontovyn. Sparas lokalt (och i molnet om man är inloggad) med
+   samma mönster som FAVORITES_KEY ovan.
+   ========================================================================= */
+const EXCLUDED_KEY = 'matchymatchy_excluded';
+
+function getExcluded(){
+  try{ return JSON.parse(localStorage.getItem(EXCLUDED_KEY)) || []; }
+  catch(e){ return []; }
+}
+function saveExcluded(list){
+  try{ localStorage.setItem(EXCLUDED_KEY, JSON.stringify(list)); }catch(e){}
+  syncToCloud();
+}
+function isExcludedName(name){ return getExcluded().some(x => x.name === name); }
+function excludePlace(place){
+  if(isExcludedName(place.name)) return;
+  const list = getExcluded();
+  list.push({ name: place.name, type: place.type || '', excludedAt: new Date().toISOString() });
+  saveExcluded(list);
+}
+function unexcludePlace(name){
+  saveExcluded(getExcluded().filter(x => x.name !== name));
+}
+// Tas bort ur en redan hämtad platslista innan poängsättning — så uteslutna
+// ställen aldrig ens hamnar i "3 bästa"-urvalet i något läge.
+function filterExcluded(places){
+  const excluded = getExcluded();
+  if(!excluded.length) return places;
+  const names = new Set(excluded.map(x => x.name));
+  return places.filter(p => !names.has(p.name));
+}
+
+/* =========================================================================
    KONTO (valfritt — sajten fungerar helt utan detta)
    Google-inloggning via Firebase, bara för att synka favoriter och
    inställningar mellan enheter. Så länge CONFIG.FIREBASE.apiKey är tomt
@@ -1164,11 +1242,16 @@ async function handleAuthChange(user){
         localStorage.setItem(FAVORITES_KEY, JSON.stringify(cloud.favorites));
         updateFavCount();
       }
+      if(Array.isArray(cloud.excluded)){
+        localStorage.setItem(EXCLUDED_KEY, JSON.stringify(cloud.excluded));
+      }
       if(cloud.prefs){
         localStorage.setItem(PREFS_KEY, JSON.stringify(cloud.prefs));
         if(typeof cloud.prefs.budgetAmount === 'number') state.budgetAmount = cloud.prefs.budgetAmount;
         if(typeof cloud.prefs.radius === 'number') state.radius = cloud.prefs.radius;
         if(typeof cloud.prefs.adventure === 'number') state.adventure = cloud.prefs.adventure;
+        if(typeof cloud.prefs.openNowOnly === 'boolean') state.openNowOnly = cloud.prefs.openNowOnly;
+        if(typeof cloud.prefs.vegetarianOnly === 'boolean') state.vegetarianOnly = cloud.prefs.vegetarianOnly;
       }
       if(state.showFavorites) renderFavorites();
     } else {
@@ -1186,6 +1269,7 @@ async function syncToCloud(){
   try{
     await fbDb.collection('users').doc(currentUser.uid).set({
       favorites: getFavorites(),
+      excluded: getExcluded(),
       prefs: getPrefs(),
       updatedAt: new Date().toISOString()
     }, { merge: true });
@@ -1248,7 +1332,7 @@ function formatMemberSince(dateStr){
 }
 
 function exportUserData(){
-  const data = { favoriter: getFavorites(), installningar: getPrefs(), exporterad: new Date().toISOString() };
+  const data = { favoriter: getFavorites(), uteslutna: getExcluded(), installningar: getPrefs(), exporterad: new Date().toISOString() };
   const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
   const url = URL.createObjectURL(blob);
   const a = document.createElement('a');
@@ -1262,6 +1346,8 @@ function resetPrefsToDefault(){
   try{ localStorage.removeItem(PREFS_KEY); }catch(e){}
   state.budgetAmount = 300;
   state.radius = 3;
+  state.openNowOnly = false;
+  state.vegetarianOnly = false;
   syncToCloud();
   renderAccount();
 }
@@ -1273,6 +1359,7 @@ function renderAccount(){
   el.card.style.minHeight = 'auto';
 
   const favorites = getFavorites();
+  const excluded = getExcluded();
   const prefs = getPrefs();
   const favTag = mostCommonTag(favorites);
   const memberSince = formatMemberSince(currentUser?.metadata?.creationTime);
@@ -1305,15 +1392,21 @@ function renderAccount(){
         <div class="account-stat-num" style="font-size:14px;">${memberSince}</div>
         <div class="account-stat-label">medlem sedan</div>
       </div>` : ''}
+      ${excluded.length ? `
+      <div class="account-stat">
+        <div class="account-stat-num">${excluded.length}</div>
+        <div class="account-stat-label">${excluded.length === 1 ? 'uteslutet ställe' : 'uteslutna ställen'}</div>
+      </div>` : ''}
     </div>
 
     ${(typeof prefs.budgetAmount === 'number' || typeof prefs.radius === 'number') ? `
     <p class="account-prefs-note">
-      Sparade standardval: ${typeof prefs.budgetAmount === 'number' ? `~${prefs.budgetAmount} kr` : 'ingen budget'}${typeof prefs.radius === 'number' ? ` · ${prefs.radius.toFixed(1)} km radie` : ''}
+      Sparade standardval: ${typeof prefs.budgetAmount === 'number' ? `~${prefs.budgetAmount} kr` : 'ingen budget'}${typeof prefs.radius === 'number' ? ` · ${prefs.radius.toFixed(1)} km radie` : ''}${prefs.openNowOnly ? ' · bara öppna nu' : ''}${prefs.vegetarianOnly ? ' · vegetariskt/veganskt' : ''}
     </p>` : ''}
 
     <div class="account-actions">
       <button class="btn btn-primary" id="viewFavsBtn">Visa sparade ställen</button>
+      <button class="btn btn-ghost" id="viewExcludedBtn">Hantera uteslutna ställen${excluded.length ? ` (${excluded.length})` : ''}</button>
       <button class="btn btn-ghost" id="exportDataBtn">Exportera mina data</button>
       <button class="btn btn-ghost" id="resetPrefsBtn">Återställ standardval</button>
       <button class="btn btn-ghost" id="signOutBtn" style="color: var(--danger);">Logga ut</button>
@@ -1323,6 +1416,11 @@ function renderAccount(){
   document.getElementById('viewFavsBtn').addEventListener('click', () => {
     state.showAccount = false;
     state.showFavorites = true;
+    render();
+  });
+  document.getElementById('viewExcludedBtn').addEventListener('click', () => {
+    state.showAccount = false;
+    state.showExcluded = true;
     render();
   });
   document.getElementById('exportDataBtn').addEventListener('click', exportUserData);
@@ -1400,6 +1498,55 @@ function renderFavorites(){
   closeBtn.style.marginTop = '14px';
   closeBtn.textContent = 'Stäng';
   closeBtn.addEventListener('click', () => { state.showFavorites = false; render(); });
+  el.card.appendChild(closeBtn);
+}
+
+// "Inte för mig" är tänkt som permanent, men allt kan bli fel-tryckt — den
+// här vyn är enda sättet att ångra: en enkel lista med "Ta tillbaka" per
+// ställe, precis som favoriter fast tvärtom.
+function renderExcluded(){
+  el.modeTabs.style.display = 'none';
+  el.steps.style.display = 'none';
+  el.dataNote.textContent = '';
+  el.card.style.minHeight = 'auto';
+  const excluded = getExcluded();
+
+  if(excluded.length === 0){
+    el.card.innerHTML = `
+      <div class="eyebrow">Uteslutna ställen</div>
+      <h1>Inga <em>uteslutna än</em></h1>
+      <p class="fav-empty">Tryck på "Inte för mig" på ett förslag för att aldrig se det igen.</p>
+    `;
+  } else {
+    el.card.innerHTML = `
+      <div class="eyebrow">Uteslutna ställen</div>
+      <h1>${excluded.length === 1 ? 'Ett' : excluded.length} <em>${excluded.length === 1 ? 'uteslutet ställe' : 'uteslutna ställen'}</em></h1>
+      <p class="lead">De här föreslås aldrig längre. Tryck "Ta tillbaka" om något hamnat här av misstag.</p>
+    `;
+    const frag = document.createDocumentFragment();
+    excluded.forEach(x => {
+      const item = document.createElement('div');
+      item.className = 'fav-list-item';
+      item.innerHTML = `
+        <div><div class="fli-name">${x.name}</div><div class="fli-type">${x.type || ''}</div></div>
+        <button class="btn-ghost" style="width:auto; padding:8px 12px; font-size:12.5px;" data-restore="${x.name}">Ta tillbaka</button>
+      `;
+      frag.appendChild(item);
+    });
+    el.card.appendChild(frag);
+    el.card.querySelectorAll('[data-restore]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        unexcludePlace(btn.dataset.restore);
+        renderExcluded();
+      });
+    });
+  }
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn btn-ghost';
+  closeBtn.style.marginTop = '14px';
+  closeBtn.textContent = 'Stäng';
+  closeBtn.addEventListener('click', () => { state.showExcluded = false; render(); });
   el.card.appendChild(closeBtn);
 }
 
@@ -1551,8 +1698,7 @@ const MODES = [
   { id:'tonight',      label:'Ikväll' },
   { id:'spontaneous', label:'Spontant' },
   { id:'group',       label:'Med vänner' },
-  { id:'date',        label:'Dejt' },
-  { id:'fika',        label:'Fikapaus' }
+  { id:'date',        label:'Dejt' }
 ];
 
 // Varje läge har sina egna quiz-steg, sin egen matchningsfunktion och sitt
@@ -1604,8 +1750,7 @@ const HOME_MODE_INFO = {
   tonight:     { emoji:"🌙", desc:"Samma quiz, men resultatet blir en hel kväll: förfest, middag och efterfest." },
   spontaneous: { emoji:"🎲", desc:"Inga frågor. Ett tryck, så väljer vi åt er." },
   group:       { emoji:"👯", desc:"Lägg till hela gänget så väger vi ihop allas smak till en matchning alla gillar." },
-  date:        { emoji:"💕", desc:"Samma quiz, men vi viktar upp mysiga och romantiska ställen — perfekt för två." },
-  fika:        { emoji:"☕", desc:"En enda fråga. Ett lugnt, nära ställe för en snabb paus." }
+  date:        { emoji:"💕", desc:"Samma quiz, men vi viktar upp mysiga och romantiska ställen — perfekt för två." }
 };
 
 function renderHome(){
@@ -1637,6 +1782,10 @@ function renderHome(){
 function render(){
   if(state.showAccount){
     renderAccount();
+    return;
+  }
+  if(state.showExcluded){
+    renderExcluded();
     return;
   }
   if(state.showFavorites){
@@ -2017,6 +2166,19 @@ function renderRadius(){
     <p class="lead">Dra i reglaget för hur stort område vi ska scanna av.</p>
     <input type="range" min="${RADIUS_MIN}" max="${RADIUS_MAX}" step="0.5" value="${state.radius}" id="radiusRange" aria-label="Sökradie i kilometer">
     <div class="range-val"><span>0,5 km</span><b id="radiusVal">${radiusValueLabel(state.radius)}</b><span>50 km</span></div>
+
+    <div class="field-label">Öppettider</div>
+    <div class="pill-row" id="openNowRow">
+      <div class="pill${!state.openNowOnly ? ' selected' : ''}" data-v="false">Alla ställen</div>
+      <div class="pill${state.openNowOnly ? ' selected' : ''}" data-v="true">Bara öppna nu</div>
+    </div>
+
+    <div class="field-label">Kost</div>
+    <div class="pill-row" id="vegRow">
+      <div class="pill${!state.vegetarianOnly ? ' selected' : ''}" data-v="false">Oviktigt</div>
+      <div class="pill${state.vegetarianOnly ? ' selected' : ''}" data-v="true">Vegetariskt/veganskt</div>
+    </div>
+
     <div class="spacer"></div>
     <button class="btn btn-primary" id="nextBtn">Nästa</button>
   `;
@@ -2026,8 +2188,22 @@ function renderRadius(){
     state.radius = parseFloat(range.value);
     valEl.textContent = radiusValueLabel(state.radius);
   });
+  document.getElementById('openNowRow').querySelectorAll('.pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      state.openNowOnly = pill.dataset.v === 'true';
+      document.getElementById('openNowRow').querySelectorAll('.pill').forEach(p => p.classList.remove('selected'));
+      pill.classList.add('selected');
+    });
+  });
+  document.getElementById('vegRow').querySelectorAll('.pill').forEach(pill => {
+    pill.addEventListener('click', () => {
+      state.vegetarianOnly = pill.dataset.v === 'true';
+      document.getElementById('vegRow').querySelectorAll('.pill').forEach(p => p.classList.remove('selected'));
+      pill.classList.add('selected');
+    });
+  });
   document.getElementById('nextBtn').addEventListener('click', () => {
-    savePrefs({ radius: state.radius });
+    savePrefs({ radius: state.radius, openNowOnly: state.openNowOnly, vegetarianOnly: state.vegetarianOnly });
     state.step++;
     render();
   });
@@ -2041,7 +2217,7 @@ function renderRadius(){
    matchningslogiken redan förstår sig på. Ingen extern AI-tjänst anropas
    här (appen har ingen backend att göra det ifrån) — "analysen" är en
    nyckelordsbaserad tolkning byggd på samma tagg-vokabulär som redan
-   används för Dejt/Fikapaus (DATE_BONUS_TAGS/CHILL_BONUS_TAGS). Om ni
+   används för Dejt-läget (DATE_BONUS_TAGS). Om ni
    senare vill koppla på en riktig språkmodell för tolkningen är det bara
    analyzeVibeText() som behöver bytas ut — allt annat (scoreWithVibe,
    reasonFor, UI) bygger redan på taggarna den returnerar.
@@ -2281,8 +2457,7 @@ function renderResults(matches){
     now: "Baserat på budget, avstånd och er vibe — här är vad matchymatchy hittade åt er.",
     spontaneous: "Vi slumpade fram budget, sträcka och stämning å era vägnar — här är vad vi hittade.",
     group: `Vi vägde ihop smaken hos ${state.groupSize || 1} ${state.groupSize === 1 ? 'person' : 'personer'} och hittade det här.`,
-    date: "Vi viktade upp mysiga, romantiska ställen — här är vad som passade bäst för er två.",
-    fika: "En snabb, lugn paus nära er — inget krångel."
+    date: "Vi viktade upp mysiga, romantiska ställen — här är vad som passade bäst för er två."
   };
 
   el.card.innerHTML = `
@@ -2307,6 +2482,7 @@ function renderResults(matches){
         <div style="display:flex; align-items:center; gap:8px;">
           <div class="match-badge">${pct}% match</div>
           <button class="fav-btn ${isFavorite(p.name) ? 'active' : ''}" data-fav="${p.name}" aria-label="Spara favorit">♥</button>
+          <button class="exclude-btn" data-exclude="${p.name}" aria-label="Inte för mig — visa aldrig igen" title="Inte för mig">✕</button>
         </div>
       </div>
       <div class="result-why">${reasonFor(p, state)}</div>
@@ -2316,9 +2492,9 @@ function renderResults(matches){
       <div class="maps-hint">📍 Öppna i Google Maps ↗</div>
     `;
     const openInMaps = () => window.open(mapsUrlFor(p), '_blank', 'noopener');
-    card.addEventListener('click', (e) => { if(e.target.closest('[data-fav], [data-hours-toggle]')) return; openInMaps(); });
+    card.addEventListener('click', (e) => { if(e.target.closest('[data-fav], [data-exclude], [data-hours-toggle]')) return; openInMaps(); });
     card.addEventListener('keydown', (e) => {
-      if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-fav], [data-hours-toggle]')){
+      if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-fav], [data-exclude], [data-hours-toggle]')){
         e.preventDefault(); openInMaps();
       }
     });
@@ -2332,6 +2508,20 @@ function renderResults(matches){
       const place = matches.find(m => m.name === btn.dataset.fav);
       const added = toggleFavorite(place);
       btn.classList.toggle('active', added);
+    });
+  });
+  el.card.querySelectorAll('[data-exclude]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const place = matches.find(m => m.name === btn.dataset.exclude);
+      if(!place) return;
+      excludePlace(place);
+      const card = btn.closest('.result-card');
+      if(card){
+        card.style.transition = 'opacity .25s ease';
+        card.style.opacity = '0';
+        setTimeout(() => card.remove(), 250);
+      }
     });
   });
 
@@ -2476,9 +2666,10 @@ function slotBonus(p, slot){
 }
 
 async function computeEveningPlan(state){
-  const places = await PlacesProvider.getPlaces({
+  const raw = await PlacesProvider.getPlaces({
     coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
   });
+  const places = applyPracticalFilters(raw, state);
   const usedInPlan = new Set();
   const bestInSlot = (slot) => {
     const sorted = places
@@ -2529,9 +2720,17 @@ function renderEveningPlan(plan){
     row.innerHTML = `
       <div class="timeline-track"><div class="timeline-dot"></div><div class="timeline-line"></div></div>
       <div class="timeline-content clickable" tabindex="0" role="link" aria-label="Öppna ${p.name} i Google Maps">
-        <div class="timeline-time">${item.time} · ${item.label}</div>
-        <div class="result-name">${p.name}</div>
-        <div class="result-type">${p.type}</div>
+        <div class="result-top" style="margin-bottom:0;">
+          <div>
+            <div class="timeline-time">${item.time} · ${item.label}</div>
+            <div class="result-name">${p.name}</div>
+            <div class="result-type">${p.type}</div>
+          </div>
+          <div style="display:flex; align-items:center; gap:8px;">
+            <button class="fav-btn ${isFavorite(p.name) ? 'active' : ''}" data-fav="${p.name}" aria-label="Spara favorit">♥</button>
+            <button class="exclude-btn" data-exclude="${p.name}" aria-label="Inte för mig — visa aldrig igen" title="Inte för mig">✕</button>
+          </div>
+        </div>
         <div class="result-why">${reasonFor(p, state)}</div>
         <div class="chips">${p.tags.map((t,i)=>`<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
         ${ratingRow(p)}
@@ -2541,11 +2740,23 @@ function renderEveningPlan(plan){
     `;
     const content = row.querySelector('.timeline-content');
     const openInMaps = () => window.open(mapsUrlFor(p), '_blank', 'noopener');
-    content.addEventListener('click', (e) => { if(e.target.closest('[data-hours-toggle]')) return; openInMaps(); });
+    content.addEventListener('click', (e) => { if(e.target.closest('[data-fav], [data-exclude], [data-hours-toggle]')) return; openInMaps(); });
     content.addEventListener('keydown', (e) => {
-      if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-hours-toggle]')){ e.preventDefault(); openInMaps(); }
+      if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-fav], [data-exclude], [data-hours-toggle]')){ e.preventDefault(); openInMaps(); }
     });
     wireHoursToggles(content);
+    row.querySelector('[data-fav]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      const added = toggleFavorite(p);
+      e.currentTarget.classList.toggle('active', added);
+    });
+    row.querySelector('[data-exclude]').addEventListener('click', (e) => {
+      e.stopPropagation();
+      excludePlace(p);
+      row.style.transition = 'opacity .25s ease';
+      row.style.opacity = '0';
+      setTimeout(() => row.remove(), 250);
+    });
     wrap.appendChild(row);
   });
 
@@ -2572,59 +2783,13 @@ function renderEveningPlan(plan){
 const DATE_BONUS_TAGS = ["Romantiskt", "Mysigt", "Datevänligt", "Utsikt"];
 
 async function computeDateMatches(state){
-  const places = await PlacesProvider.getPlaces({
+  const raw = await PlacesProvider.getPlaces({
     coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
   });
+  const places = applyPracticalFilters(raw, state);
   const bonusTags = [...DATE_BONUS_TAGS, ...(state.vibeTags || [])];
   const sorted = places
     .map(p => ({ ...p, score: scorePlace(p, state) * 0.75 + tagBonus(p, bonusTags) * 0.25 }))
-    .sort((a,b) => b.score - a.score);
-  return pickUnseen(sorted, state);
-}
-
-/* =========================================================================
-   LÄGE: FIKAPAUS
-   Det snabbaste "riktiga" läget efter Spontant — en enda fråga (budget),
-   resten sätts till lugna standardvärden: kort radie, låg äventyrsnivå,
-   och matchningen viktar upp avslappnade/lugna taggar.
-   ========================================================================= */
-const CHILL_BONUS_TAGS = ["Avslappnat", "Lugnt", "Prisvärt"];
-
-function renderFikaIntro(){
-  el.card.innerHTML = `
-    <div class="eyebrow">Fikapaus</div>
-    <h1>Snabb <em>paus?</em></h1>
-    <p class="lead">En fråga, så hittar vi ett lugnt, nära ställe att andas ut på.</p>
-    <div class="field-label">Budget</div>
-    <div class="pill-row" id="fikaBudget">
-      ${[{v:1,l:"€"},{v:2,l:"€€"},{v:3,l:"€€€"},{v:4,l:"€€€€"}].map(o=>`<div class="pill${state.budget===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
-    </div>
-    <div class="spacer"></div>
-    <button class="btn btn-primary" id="fikaNextBtn" ${state.budget ? '' : 'disabled'}>Hitta ett ställe</button>
-  `;
-  el.card.querySelectorAll('#fikaBudget .pill').forEach(pill=>{
-    pill.addEventListener('click', () => { state.budget = parseInt(pill.dataset.v, 10); render(); });
-  });
-  const nextBtn = document.getElementById('fikaNextBtn');
-  if(!nextBtn.disabled){
-    nextBtn.addEventListener('click', () => {
-      state.radius = 1.5;
-      state.adventure = 1;
-      state.budgetAmount = { 1:100, 2:250, 3:500, 4:900 }[state.budget];
-      state.step++;
-      render();
-    });
-  }
-}
-
-async function computeFikaMatches(state){
-  if(!state.coords) state.coords = await quickLocation();
-  const places = await PlacesProvider.getPlaces({
-    coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
-  });
-  const bonusTags = [...CHILL_BONUS_TAGS, ...(state.vibeTags || [])];
-  const sorted = places
-    .map(p => ({ ...p, score: scorePlace(p, state) * 0.7 + tagBonus(p, bonusTags) * 0.3 }))
     .sort((a,b) => b.score - a.score);
   return pickUnseen(sorted, state);
 }
@@ -2684,13 +2849,6 @@ FLOWS = {
       "Väger in er vibe…",
       "Rankar bästa dejtställena…"
     ]
-  },
-  fika: {
-    steps: [renderFikaIntro],
-    matcher: computeFikaMatches,
-    resultRenderer: renderResults,
-    minDelay: 1200,
-    loadingMessages: () => ["Letar efter ett lugnt hörn…", "Kollar vad som är öppet nu…", "Klart snart…"]
   }
 };
 
