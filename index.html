@@ -174,6 +174,26 @@
   .chip{ font-size:11px; font-weight:600; padding:4px 9px; border-radius:100px; border:1px solid var(--line); color: var(--muted); }
   .chip.mint{ color: var(--mint); border-color: rgba(127,191,160,0.4); }
 
+  .hours-row{ display:flex; align-items:center; flex-wrap:wrap; gap:9px; margin: 10px 0 0; }
+  .hours-badge{
+    display:inline-flex; align-items:center; gap:6px;
+    font-size:11.5px; font-weight:700; padding:4px 10px; border-radius:100px;
+  }
+  .hours-badge.open{ color: var(--mint); background: rgba(127,191,160,0.14); }
+  .hours-badge.closed{ color: var(--danger); background: rgba(255,143,143,0.14); }
+  .hours-dot{ width:6px;height:6px; border-radius:50%; background: currentColor; display:inline-block; }
+  .hours-today{ font-size:12px; color: var(--muted); }
+  .hours-toggle{
+    border:none; background:transparent; color: var(--accent-2);
+    font-size:11.5px; font-weight:700; cursor:pointer; padding:0;
+    font-family:'Plus Jakarta Sans', sans-serif; text-decoration:underline; text-underline-offset:2px;
+  }
+  .hours-list{
+    margin-top:8px; padding:10px 12px; border-radius:12px;
+    background: rgba(251,243,233,0.04); border:1px solid var(--line);
+  }
+  .hours-list-row{ font-size:12px; color: var(--muted); line-height:1.7; }
+
   .result-card.clickable, .timeline-content.clickable{ cursor:pointer; transition: border-color .15s ease, transform .15s ease; }
   .result-card.clickable{ border-color: rgba(255,200,87,0.35); }
   .result-card.clickable:hover, .result-card.clickable:focus-visible{ border-color: var(--accent-2); }
@@ -529,6 +549,7 @@ const PlacesProvider = (() => {
         "department_store", "shopping_mall", "market"
       ],
       maxResultCount: 20,
+      languageCode: "sv",
       locationRestriction: {
         circle: {
           center: { latitude: criteria.coords.lat, longitude: criteria.coords.lng },
@@ -547,7 +568,10 @@ const PlacesProvider = (() => {
         // som platsens huvudkategori. Vi hämtar "primaryType" separat
         // eftersom det är fältet Google faktiskt avsett för kategorisering
         // (se kommentar vid tidigare bugg i guessSlot/capitalizeType nedan).
-        "X-Goog-FieldMask": "places.id,places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount,places.editorialSummary,places.outdoorSeating,places.goodForGroups,places.servesVegetarianFood,places.servesBeer,places.servesWine,places.servesCocktails"
+        // "currentOpeningHours" ger öppet/stängt just nu (tar hänsyn till
+        // tillfälliga avvikelser, t.ex. helgdagar) — "regularOpeningHours"
+        // ger den vanliga veckoscheman-texten att visa i listan.
+        "X-Goog-FieldMask": "places.id,places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount,places.editorialSummary,places.outdoorSeating,places.goodForGroups,places.servesVegetarianFood,places.servesBeer,places.servesWine,places.servesCocktails,places.currentOpeningHours,places.regularOpeningHours"
       },
       body: JSON.stringify(body)
     });
@@ -585,6 +609,17 @@ const PlacesProvider = (() => {
         lat: p.location.latitude,
         lng: p.location.longitude,
         placeId: p.id || null,
+        // "openNow" tas från currentOpeningHours i första hand (tar hänsyn
+        // till tillfälliga avvikelser som helgdagar); faller tillbaka på
+        // regularOpeningHours om den saknas. null = Google gav ingen
+        // öppettidsdata alls, vilket UI:t visar ärligt istället för att gissa.
+        openNow: typeof p.currentOpeningHours?.openNow === "boolean"
+          ? p.currentOpeningHours.openNow
+          : (typeof p.regularOpeningHours?.openNow === "boolean" ? p.regularOpeningHours.openNow : null),
+        // Sju rader, en per veckodag, redan formaterade av Google (på
+        // svenska tack vare languageCode i anropet) — används både för
+        // dagens rad och den expanderbara veckolistan i UI:t.
+        weekdayHours: p.regularOpeningHours?.weekdayDescriptions || null,
         // Flaggar snabbmatskedjor för scorePlace() istället för att
         // plocka bort dem helt — de ska kunna dyka upp ibland, bara inte
         // ofta eller högt rankade (se isQuickServiceChain nedan).
@@ -788,6 +823,67 @@ function ratingRow(p){
     <span class="rating-value">${p.rating.toFixed(1)}</span>
     <span class="rating-count">(${p.reviews} recensioner)</span>
   </div>`;
+}
+
+// Plockar ut dagens rad ur Googles sju-raders veckoschema. Google ordnar
+// listan måndag→söndag (ISO-veckodag); JS Date.getDay() ger 0=söndag,
+// så vi räknar om till samma ordning istället för att anta att de matchar.
+function todayHoursLine(weekdayHours){
+  if(!Array.isArray(weekdayHours) || weekdayHours.length !== 7) return null;
+  const jsDay = new Date().getDay(); // 0=sön..6=lör
+  const isoIndex = (jsDay + 6) % 7;  // 0=mån..6=sön, samma ordning som Google
+  return weekdayHours[isoIndex] || null;
+}
+
+let hoursBlockCounter = 0;
+
+// Bygger öppettidsblocket för ett kort: en öppet/stängt-pill, dagens rad,
+// och en expanderbar lista med hela veckan. Renderas bara det Google
+// faktiskt gav oss — visar aldrig en gissning som om den vore fakta.
+function hoursBlockHtml(p){
+  if(p.openNow == null && !p.weekdayHours) return "";
+  const id = `hrs-${++hoursBlockCounter}`;
+  const badge = p.openNow == null ? "" : `
+    <span class="hours-badge ${p.openNow ? 'open' : 'closed'}">
+      <i class="hours-dot"></i>${p.openNow ? 'Öppet nu' : 'Stängt nu'}
+    </span>`;
+  const today = todayHoursLine(p.weekdayHours);
+  const todayText = today ? capitalizeFirstClient(today) : "";
+  const toggle = p.weekdayHours
+    ? `<button type="button" class="hours-toggle" data-hours-toggle="${id}">Visa veckans tider</button>`
+    : "";
+  const list = p.weekdayHours
+    ? `<div class="hours-list" id="${id}" hidden>${p.weekdayHours.map(d => `<div class="hours-list-row">${capitalizeFirstClient(d)}</div>`).join('')}</div>`
+    : "";
+  return `
+    <div class="hours-row">
+      ${badge}
+      ${todayText ? `<span class="hours-today">${todayText}</span>` : ""}
+      ${toggle}
+    </div>
+    ${list}
+  `;
+}
+
+function capitalizeFirstClient(str){
+  return str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
+}
+
+// Kopplar klick på "Visa/Dölj veckans tider" inom ett givet element (ett
+// resultatkort eller en tidslinjerad) — separat från kortets egen
+// klick-till-Maps-lyssnare, så en tryckning på knappen aldrig råkar öppna
+// Google Maps också.
+function wireHoursToggles(container){
+  container.querySelectorAll('[data-hours-toggle]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      const list = document.getElementById(btn.dataset.hoursToggle);
+      if(!list) return;
+      const willShow = list.hidden;
+      list.hidden = !willShow;
+      btn.textContent = willShow ? "Dölj veckans tider" : "Visa veckans tider";
+    });
+  });
 }
 
 // Bygger en Google Maps-länk för ett förslag, så hela kortet kan klickas
@@ -1778,15 +1874,17 @@ function renderResults(matches){
       <div class="result-why">${reasonFor(p, state)}</div>
       <div class="chips">${p.tags.map((t,i) => `<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
       ${ratingRow(p)}
+      ${hoursBlockHtml(p)}
       <div class="maps-hint">📍 Öppna i Google Maps ↗</div>
     `;
     const openInMaps = () => window.open(mapsUrlFor(p), '_blank', 'noopener');
-    card.addEventListener('click', (e) => { if(e.target.closest('[data-fav]')) return; openInMaps(); });
+    card.addEventListener('click', (e) => { if(e.target.closest('[data-fav], [data-hours-toggle]')) return; openInMaps(); });
     card.addEventListener('keydown', (e) => {
-      if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-fav]')){
+      if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-fav], [data-hours-toggle]')){
         e.preventDefault(); openInMaps();
       }
     });
+    wireHoursToggles(card);
     frag.appendChild(card);
   });
   el.card.appendChild(frag);
@@ -1986,15 +2084,17 @@ function renderEveningPlan(plan){
         <div class="result-why">${reasonFor(p, state)}</div>
         <div class="chips">${p.tags.map((t,i)=>`<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
         ${ratingRow(p)}
+        ${hoursBlockHtml(p)}
         <div class="maps-hint">📍 Öppna i Google Maps ↗</div>
       </div>
     `;
     const content = row.querySelector('.timeline-content');
     const openInMaps = () => window.open(mapsUrlFor(p), '_blank', 'noopener');
-    content.addEventListener('click', openInMaps);
+    content.addEventListener('click', (e) => { if(e.target.closest('[data-hours-toggle]')) return; openInMaps(); });
     content.addEventListener('keydown', (e) => {
-      if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); openInMaps(); }
+      if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-hours-toggle]')){ e.preventDefault(); openInMaps(); }
     });
+    wireHoursToggles(content);
     wrap.appendChild(row);
   });
 
