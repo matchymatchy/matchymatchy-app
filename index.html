@@ -438,6 +438,19 @@
 
   .account-prefs-note{ font-size:12.5px; color: var(--muted); margin: 0 0 18px; line-height:1.5; }
   .account-actions{ display:flex; flex-direction:column; gap:10px; }
+
+  .loc-help-overlay{
+    position:fixed; inset:0; background:rgba(0,0,0,0.65); backdrop-filter: blur(2px);
+    display:flex; align-items:center; justify-content:center; z-index:200; padding:20px;
+  }
+  .loc-help-modal{
+    background: linear-gradient(160deg, var(--card), var(--bg-soft));
+    border:1px solid var(--line); border-radius:20px; padding:26px 22px;
+    max-width:360px; width:100%; box-shadow: 0 24px 60px rgba(0,0,0,0.45);
+  }
+  .loc-help-steps{ margin: 4px 0 20px; padding-left:20px; color: var(--cream); }
+  .loc-help-steps li{ font-size:14px; line-height:1.55; margin-bottom:8px; }
+  .loc-help-modal .btn{ width:100%; margin-bottom:8px; }
   .fav-list-item .fli-name{ font-family:'Fraunces', serif; font-weight:600; font-size:15.5px; }
   .fav-list-item .fli-type{ font-size:12px; color: var(--muted); }
 
@@ -1703,15 +1716,112 @@ function requestLocation(){
       status.textContent = "Plats hittad ✓";
       setTimeout(() => { state.step++; render(); }, 500);
     },
-    () => {
+    (err) => {
       // Går INTE vidare automatiskt här längre — annars kunde man hamna i
       // nästa steg utan riktiga koordinater, vilket gjorde att förslagen
       // tyst föll tillbaka på exempeldata med hittepå-avstånd som såg ut
       // som riktiga. Be istället om en adress, så avstånden alltid stämmer.
       status.classList.add('err');
       status.textContent = "Ingen åtkomst till din plats — skriv in en adress eller ett ställe nedan istället.";
+      // Kod 1 (nekad) eller 2 (otillgänglig) betyder oftast att platstjänster
+      // är helt avstängt på systemnivå — då hjälper det inte att bara fråga
+      // igen, så vi visar konkreta steg för just den här enheten istället.
+      if(err && (err.code === 1 || err.code === 2)){
+        showLocationHelpModal();
+      }
     }
   );
+}
+
+function detectPlatform(){
+  const ua = navigator.userAgent || '';
+  if(/iPad|iPhone|iPod/.test(ua)) return 'ios';
+  if(/Android/.test(ua)) return 'android';
+  if(/Macintosh/.test(ua)) return 'mac';
+  if(/Windows/.test(ua)) return 'windows';
+  return 'other';
+}
+
+const LOCATION_HELP = {
+  ios: {
+    title: "Aktivera plats på iPhone/iPad",
+    steps: [
+      "Öppna Inställningar på hemskärmen",
+      "Gå till Sekretess och säkerhet → Platstjänster",
+      "Slå på huvudbrytaren högst upp",
+      "Bläddra ner till din webbläsare (t.ex. Safari) i listan och välj \"Fråga nästa gång eller när appen används\""
+    ],
+    canDeepLink: false
+  },
+  android: {
+    title: "Aktivera plats på Android",
+    steps: [
+      "Tryck på knappen nedan för att öppna platsinställningarna direkt",
+      "Slå på \"Använd plats\" högst upp",
+      "Kom tillbaka hit och tryck \"Dela plats\" igen"
+    ],
+    canDeepLink: true
+  },
+  mac: {
+    title: "Aktivera plats på Mac",
+    steps: [
+      "Öppna Systeminställningar → Sekretess och säkerhet → Platstjänster",
+      "Slå på huvudbrytaren",
+      "Se till att din webbläsare är ikryssad i listan nedanför"
+    ],
+    canDeepLink: false
+  },
+  windows: {
+    title: "Aktivera plats på Windows",
+    steps: [
+      "Öppna Inställningar → Sekretess och säkerhet → Plats",
+      "Slå på \"Platstjänster\"",
+      "Se till att din webbläsare har tillåtelse i listan under"
+    ],
+    canDeepLink: false
+  },
+  other: {
+    title: "Aktivera platsåtkomst",
+    steps: [
+      "Kontrollera att platstjänster är påslaget i enhetens systeminställningar",
+      "Kontrollera att webbläsaren har tillåtelse att använda plats där",
+      "Ladda om sidan och försök igen"
+    ],
+    canDeepLink: false
+  }
+};
+
+// Webbsidor kan tyvärr inte öppna iPhones inställningar direkt — Apple
+// tog bort den möjligheten för alla webbsidor för flera år sedan, av
+// integritetsskäl. Android tillåter det för just platsinställningar,
+// så där kan vi faktiskt hoppa rakt dit.
+function openAndroidLocationSettings(){
+  window.location.href = "intent:#Intent;action=android.settings.LOCATION_SOURCE_SETTINGS;end";
+}
+
+function showLocationHelpModal(){
+  if(document.querySelector('.loc-help-overlay')) return;
+  const info = LOCATION_HELP[detectPlatform()];
+  const overlay = document.createElement('div');
+  overlay.className = 'loc-help-overlay';
+  overlay.innerHTML = `
+    <div class="loc-help-modal">
+      <div class="eyebrow">Platstjänster verkar vara avstängda</div>
+      <h1>${info.title}</h1>
+      <p class="lead">Det här är en inställning på själva enheten, inte ett fel på sidan — samma sak gäller på alla webbsidor som ber om exakt plats.</p>
+      <ol class="loc-help-steps">
+        ${info.steps.map(s => `<li>${s}</li>`).join('')}
+      </ol>
+      ${info.canDeepLink ? `<button class="btn btn-primary" id="locHelpDeepLink">Öppna platsinställningar</button>` : ''}
+      <button class="btn btn-ghost" id="locHelpClose">Stäng, jag skriver in platsen själv</button>
+    </div>
+  `;
+  document.body.appendChild(overlay);
+  if(info.canDeepLink){
+    document.getElementById('locHelpDeepLink').addEventListener('click', openAndroidLocationSettings);
+  }
+  document.getElementById('locHelpClose').addEventListener('click', () => overlay.remove());
+  overlay.addEventListener('click', (e) => { if(e.target === overlay) overlay.remove(); });
 }
 
 // Låter användaren skriva in valfri plats — inte bara en gatuadress, utan
