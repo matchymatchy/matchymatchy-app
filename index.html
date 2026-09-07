@@ -417,6 +417,27 @@
   .fav-list-item.clickable{ cursor:pointer; transition: border-color .15s ease, transform .15s ease; }
   .fav-list-item.clickable:hover, .fav-list-item.clickable:focus-visible{ border-color: var(--accent-2); }
   .fav-list-item.clickable:active{ transform: scale(0.99); }
+
+  .account-header{ display:flex; align-items:center; gap:12px; margin-bottom:20px; }
+  .account-avatar{ width:52px; height:52px; border-radius:50%; object-fit:cover; flex-shrink:0; }
+  .account-avatar-fallback{
+    display:flex; align-items:center; justify-content:center;
+    background: linear-gradient(135deg, var(--accent), var(--accent-2));
+    color:#241016; font-family:'Fraunces', serif; font-weight:600; font-size:20px;
+  }
+  .account-name{ font-family:'Fraunces', serif; font-weight:600; font-size:17px; }
+  .account-email{ font-size:12px; color: var(--muted); }
+
+  .account-stats{ display:flex; gap:10px; margin-bottom:16px; flex-wrap:wrap; }
+  .account-stat{
+    flex:1; min-width:90px; background: rgba(251,243,233,0.05); border:1px solid var(--line);
+    border-radius:14px; padding:12px; text-align:center;
+  }
+  .account-stat-num{ font-family:'Fraunces', serif; font-weight:600; font-size:20px; color: var(--accent-2); }
+  .account-stat-label{ font-size:11px; color: var(--muted); margin-top:2px; }
+
+  .account-prefs-note{ font-size:12.5px; color: var(--muted); margin: 0 0 18px; line-height:1.5; }
+  .account-actions{ display:flex; flex-direction:column; gap:10px; }
   .fav-list-item .fli-name{ font-family:'Fraunces', serif; font-weight:600; font-size:15.5px; }
   .fav-list-item .fli-type{ font-size:12px; color: var(--muted); }
 
@@ -1008,6 +1029,7 @@ const state = {
   groupDraft: { budget: null, adventure: null }, // "Med vänner": person som håller på att läggas till
   groupSize: 0,
   showFavorites: false,
+  showAccount: false,
   // Steg 4 · Vibe: antingen en förvald preset ("preset") eller en egen
   // text som tolkats av analyzeVibeText() ("custom"). vibeTags används av
   // scoreWithVibe()/tagBonus() för att vikta matchningarna.
@@ -1164,8 +1186,8 @@ function updateAccountUI(){
   if(!FIREBASE_ENABLED){ el.accountBtn.hidden = true; return; }
   if(currentUser){
     el.accountBtn.classList.add('signed-in');
-    el.accountLabel.textContent = currentUser.displayName ? currentUser.displayName.split(' ')[0] : 'Inloggad';
-    el.accountBtn.setAttribute('aria-label', 'Logga ut');
+    el.accountLabel.textContent = currentUser.displayName ? currentUser.displayName.split(' ')[0] : 'Mitt konto';
+    el.accountBtn.setAttribute('aria-label', 'Visa mitt konto');
   } else {
     el.accountBtn.classList.remove('signed-in');
     el.accountLabel.textContent = 'Logga in';
@@ -1176,14 +1198,136 @@ function updateAccountUI(){
 function toggleAccount(){
   if(!FIREBASE_ENABLED) return;
   if(currentUser){
-    if(confirm('Logga ut från matchymatchy?')) fbAuth.signOut();
+    state.showAccount = true;
+    state.showFavorites = false;
+    render();
   } else {
-    fbAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider())
-      .catch(e => {
-        console.warn("matchymatchy: inloggning misslyckades.", e);
-        alert("Inloggningen misslyckades: " + e.code + "\n" + e.message);
-      });
+    signInWithGoogle();
   }
+}
+
+function signInWithGoogle(){
+  fbAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider())
+    .catch(e => {
+      console.warn("matchymatchy: inloggning misslyckades.", e);
+      alert("Inloggningen misslyckades: " + e.code + "\n" + e.message);
+    });
+}
+
+/* =========================================================================
+   KONTOVY
+   Visas när man klickar på sitt namn högst upp. Egen profil, sparade
+   ställen, och några smarta genvägar — allt byggt på data som redan finns
+   (favoriter + sparade inställningar), inget extra att underhålla.
+   ========================================================================= */
+function mostCommonTag(favorites){
+  const counts = {};
+  favorites.forEach(f => (f.tags || []).forEach(t => { counts[t] = (counts[t] || 0) + 1; }));
+  const sorted = Object.entries(counts).sort((a,b) => b[1] - a[1]);
+  return sorted.length ? sorted[0][0] : null;
+}
+
+function formatMemberSince(dateStr){
+  if(!dateStr) return null;
+  try{
+    return new Date(dateStr).toLocaleDateString('sv-SE', { year: 'numeric', month: 'long' });
+  }catch(e){ return null; }
+}
+
+function exportUserData(){
+  const data = { favoriter: getFavorites(), installningar: getPrefs(), exporterad: new Date().toISOString() };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'matchymatchy-mina-data.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
+function resetPrefsToDefault(){
+  try{ localStorage.removeItem(PREFS_KEY); }catch(e){}
+  state.budgetAmount = 300;
+  state.radius = 3;
+  syncToCloud();
+  renderAccount();
+}
+
+function renderAccount(){
+  el.modeTabs.style.display = 'none';
+  el.steps.style.display = 'none';
+  el.dataNote.textContent = '';
+  el.card.style.minHeight = 'auto';
+
+  const favorites = getFavorites();
+  const prefs = getPrefs();
+  const favTag = mostCommonTag(favorites);
+  const memberSince = formatMemberSince(currentUser?.metadata?.creationTime);
+  const photo = currentUser?.photoURL;
+  const name = currentUser?.displayName || 'Ditt konto';
+  const email = currentUser?.email || '';
+
+  el.card.innerHTML = `
+    <div class="eyebrow">Mitt konto</div>
+    <div class="account-header">
+      ${photo ? `<img src="${photo}" alt="" class="account-avatar" referrerpolicy="no-referrer">` : `<div class="account-avatar account-avatar-fallback">${name.charAt(0).toUpperCase()}</div>`}
+      <div>
+        <div class="account-name">${name}</div>
+        ${email ? `<div class="account-email">${email}</div>` : ''}
+      </div>
+    </div>
+
+    <div class="account-stats">
+      <div class="account-stat">
+        <div class="account-stat-num">${favorites.length}</div>
+        <div class="account-stat-label">${favorites.length === 1 ? 'sparat ställe' : 'sparade ställen'}</div>
+      </div>
+      ${favTag ? `
+      <div class="account-stat">
+        <div class="account-stat-num" style="font-size:15px;">${favTag}</div>
+        <div class="account-stat-label">er favoritstil</div>
+      </div>` : ''}
+      ${memberSince ? `
+      <div class="account-stat">
+        <div class="account-stat-num" style="font-size:14px;">${memberSince}</div>
+        <div class="account-stat-label">medlem sedan</div>
+      </div>` : ''}
+    </div>
+
+    ${(typeof prefs.budgetAmount === 'number' || typeof prefs.radius === 'number') ? `
+    <p class="account-prefs-note">
+      Sparade standardval: ${typeof prefs.budgetAmount === 'number' ? `~${prefs.budgetAmount} kr` : 'ingen budget'}${typeof prefs.radius === 'number' ? ` · ${prefs.radius.toFixed(1)} km radie` : ''}
+    </p>` : ''}
+
+    <div class="account-actions">
+      <button class="btn btn-primary" id="viewFavsBtn">Visa sparade ställen</button>
+      <button class="btn btn-ghost" id="exportDataBtn">Exportera mina data</button>
+      <button class="btn btn-ghost" id="resetPrefsBtn">Återställ standardval</button>
+      <button class="btn btn-ghost" id="signOutBtn" style="color: var(--danger);">Logga ut</button>
+    </div>
+  `;
+
+  document.getElementById('viewFavsBtn').addEventListener('click', () => {
+    state.showAccount = false;
+    state.showFavorites = true;
+    render();
+  });
+  document.getElementById('exportDataBtn').addEventListener('click', exportUserData);
+  document.getElementById('resetPrefsBtn').addEventListener('click', resetPrefsToDefault);
+  document.getElementById('signOutBtn').addEventListener('click', () => {
+    if(confirm('Logga ut från matchymatchy?')){
+      state.showAccount = false;
+      fbAuth.signOut();
+      goHome();
+    }
+  });
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn btn-ghost';
+  closeBtn.style.marginTop = '4px';
+  closeBtn.textContent = 'Stäng';
+  closeBtn.addEventListener('click', () => { state.showAccount = false; render(); });
+  el.card.appendChild(closeBtn);
 }
 
 function renderFavorites(){
@@ -1374,7 +1518,7 @@ if(el.consentOkBtn){
 }
 
 function goHome(){
-  if(state.mode === 'home' && state.step === 0 && !state.showFavorites) return;
+  if(state.mode === 'home' && state.step === 0 && !state.showFavorites && !state.showAccount) return;
   state.mode = 'home';
   state.step = 0;
   state.coords = null;
@@ -1382,6 +1526,7 @@ function goHome(){
   state.groupDraft = { budget: null, adventure: null };
   state.groupSize = 0;
   state.showFavorites = false;
+  state.showAccount = false;
   state.vibeSource = null; state.vibeId = null; state.vibeLabel = ''; state.vibeTags = []; state.customVibeText = '';
   state.seenNames = [];
   el.card.style.minHeight = '380px';
@@ -1477,6 +1622,10 @@ function renderHome(){
 }
 
 function render(){
+  if(state.showAccount){
+    renderAccount();
+    return;
+  }
   if(state.showFavorites){
     renderFavorites();
     return;
