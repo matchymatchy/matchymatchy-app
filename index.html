@@ -1808,7 +1808,6 @@ function showLocationHelpModal(){
     <div class="loc-help-modal">
       <div class="eyebrow">Platstjänster verkar vara avstängda</div>
       <h1>${info.title}</h1>
-      <p class="lead">Det här är en inställning på själva enheten, inte ett fel på sidan — samma sak gäller på alla webbsidor som ber om exakt plats.</p>
       <ol class="loc-help-steps">
         ${info.steps.map(s => `<li>${s}</li>`).join('')}
       </ol>
@@ -2466,16 +2465,29 @@ async function computeGroupMatches(state){
    Samma quiz som "Nu", men resultatet blir en kvällsplan i tre steg
    (förfest → middag → efterfest) istället för tre fristående alternativ.
    ========================================================================= */
+
+// Ger ett plus i poängen om ett ställes kategori passar tidpunkten, men
+// UTESLUTER inte längre andra ställen helt. Tidigare krävde t.ex. "förfest"
+// exakt ett café och "efterfest" exakt en bar — fanns inget sådant inom
+// radien blev den delen av kvällsplanen bara tom. Nu får bästa tillgängliga
+// ställe alltid en plats i planen, med en bonus till det som passar bäst.
+function slotBonus(p, slot){
+  return p.slot === slot ? 0.35 : 0;
+}
+
 async function computeEveningPlan(state){
   const places = await PlacesProvider.getPlaces({
     coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
   });
+  const usedInPlan = new Set();
   const bestInSlot = (slot) => {
     const sorted = places
-      .filter(p => p.slot === slot)
-      .map(p => ({ ...p, score: scoreWithVibe(p, state) }))
+      .filter(p => !usedInPlan.has(p.name))
+      .map(p => ({ ...p, score: scoreWithVibe(p, state) + slotBonus(p, slot) }))
       .sort((a,b) => b.score - a.score);
-    return pickUnseen(sorted, state, 1)[0] || null;
+    const pick = pickUnseen(sorted, state, 1)[0] || sorted[0] || null;
+    if(pick) usedInPlan.add(pick.name);
+    return pick;
   };
 
   return {
