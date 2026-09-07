@@ -574,7 +574,7 @@ const PlacesProvider = (() => {
     {name:"Barrio Nio", type:"Gatukökskrog · Sydamerikanskt", price:1, dist:0.8, adv:2, tags:["Prisvärt","Livlig stämning"], trait:"deras husgjorda chili-sås som stamgästerna pratar om", slot:"main", rating:4.6, reviews:312, openNow:true},
     {name:"Rök & Lin", type:"Bar · Naturviner", price:2, dist:1.6, adv:3, tags:["Mysigt","Bra för samtal"], trait:"en handplockad vinlista som byts varje vecka", slot:"late", rating:4.8, reviews:189, openNow:true},
     {name:"Höjden 12", type:"Takbar", price:3, dist:2.4, adv:4, tags:["Utsikt","Datevänligt"], trait:"panoramautsikt över hela stan från åttonde våningen", slot:"late", rating:4.4, reviews:501, openNow:false},
-    {name:"Grus & Grönt", type:"Vegetariskt kök", price:2, dist:1.1, adv:2, tags:["Hälsosamt","Lugnt"], trait:"en meny som byggs helt efter dagens skörd", slot:"main", rating:4.7, reviews:96, vegetarian:true, openNow:true},
+    {name:"Grus & Grönt", type:"Vegetariskt kök", price:2, dist:1.1, adv:2, tags:["Hälsosamt","Lugnt"], trait:"en meny som byggs helt efter dagens skörd", slot:"main", rating:4.7, reviews:96, openNow:true},
     {name:"Kajplats 4", type:"Fiskrestaurang · Hamnen", price:3, dist:3.2, adv:3, tags:["Romantiskt","Havsnära"], trait:"råvaror som kommer direkt från morgonens fångst", slot:"main", rating:4.5, reviews:220, openNow:true},
     {name:"Underjorden", type:"Speakeasy-bar", price:2, dist:2.0, adv:5, tags:["Hemlig entré","Äventyrligt"], trait:"en dold ingång bakom en gammal telefonkiosk", slot:"late", rating:4.9, reviews:143, openNow:true},
     {name:"Smulan", type:"Bakverk & kaffe", price:1, dist:0.5, adv:1, tags:["Prisvärt","Avslappnat"], trait:"kanelbullar som säljer slut innan lunch", slot:"early", rating:4.3, reviews:267, openNow:false},
@@ -685,10 +685,6 @@ const PlacesProvider = (() => {
         lat: p.location.latitude,
         lng: p.location.longitude,
         placeId: p.id || null,
-        // Separat booleskt fält (utöver "Hälsosamt"-taggen ovan) — det är
-        // det här filterVegetarian()/vegetarianOnly-togglen faktiskt kollar,
-        // så filtreringen inte råkar bli beroende av hur taggen visas.
-        vegetarian: !!p.servesVegetarianFood,
         // "openNow" tas från currentOpeningHours i första hand (tar hänsyn
         // till tillfälliga avvikelser som helgdagar); faller tillbaka på
         // regularOpeningHours om den saknas. null = Google gav ingen
@@ -866,15 +862,19 @@ function scorePlace(p, state){
   // villkor med "riktiga" restauranger/barer/caféer och nästan aldrig
   // hamnar högst upp om det finns bättre alternativ.
   if(p.isChain) score *= 0.45;
-  // Samma idé för stängda ställen: vi filtrerar inte bort dem helt som
-  // standard (openNow kan saknas/vara null, och ett stängt ställe kan ändå
-  // vara "rätt" om inget annat finns) — men de nedprioriteras rejält så de
-  // nästan aldrig konkurrerar ut ett öppet ställe. Den som vill garanterat
-  // slippa stängda ställen kryssar i "Bara öppna nu" i steg 3, vilket
-  // filtrerar bort dem helt innan poängsättningen ens körs (se
-  // applyPracticalFilters).
-  if(p.openNow === false) score *= 0.35;
   return score;
+}
+
+// Öppna ställen (openNow===true ELLER null/okänt) ska ALLTID rankas före
+// stängda (openNow===false) — oavsett poäng. Bara om det inte finns några
+// öppna alls faller listan tillbaka på stängda ställen. Det här är alltså
+// en hård prioritetsordning, inte bara ett poängavdrag — används istället
+// för ett vanligt score-baserat sort() överallt där platser rankas.
+function compareByOpenThenScore(a, b){
+  const aClosed = a.openNow === false;
+  const bClosed = b.openNow === false;
+  if(aClosed !== bClosed) return aClosed ? 1 : -1;
+  return b.score - a.score;
 }
 
 // Ger bonuspoäng till platser vars taggar matchar en lista — används av
@@ -1011,18 +1011,6 @@ function scoreWithVibe(p, state, vibeWeight = 0.25){
   return base * (1 - vibeWeight) + tagBonus(p, state.vibeTags) * vibeWeight;
 }
 
-// Körs på RÅ platslistan innan poängsättning, i alla lägen. Tre filter i
-// tur och ordning: uteslutna ställen ("Inte för mig") tas alltid bort;
-// öppet-nu och vegetariskt/veganskt tas bara bort om respektive toggle i
-// steg 3 är påslagen (annars påverkar de bara poängen mjukt, se
-// scorePlace/openNow-avdraget).
-function applyPracticalFilters(places, state){
-  let result = filterExcluded(places);
-  if(state.openNowOnly) result = result.filter(p => p.openNow !== false);
-  if(state.vegetarianOnly) result = result.filter(p => p.vegetarian === true);
-  return result;
-}
-
 // Plockar ut de N bästa ur en redan poängsatt+sorterad lista, men hoppar
 // över ställen som redan visats i det här sökpasset (state.seenNames) —
 // det är det som gör att "Sök igen" ger nya alternativ istället för att
@@ -1051,7 +1039,7 @@ async function computeMatches(state){
   // Vid reglagets ändlägen filtrerar vi strikt på prisnivå istället för att
   // bara vikta den i poängen — annars skulle "över 2000 kr" ändå kunna visa
   // billiga ställen bara för att fylla ut till tre kort.
-  let candidates = applyPracticalFilters(places, state);
+  let candidates = filterExcluded(places);
   if(isOpenEndedLow(state.budgetAmount)){
     candidates = candidates.filter(p => p.price === 1);
   } else if(isOpenEndedHigh(state.budgetAmount)){
@@ -1060,7 +1048,7 @@ async function computeMatches(state){
 
   const sorted = candidates
     .map(p => ({ ...p, score: scoreWithVibe(p, state) }))
-    .sort((a,b) => b.score - a.score);
+    .sort(compareByOpenThenScore);
 
   return pickUnseen(sorted, state);
 }
@@ -1078,11 +1066,6 @@ const state = {
   showFavorites: false,
   showAccount: false,
   showExcluded: false,
-  // Steg 3 · Sträcka: praktiska filter utöver avstånd. Sparas som
-  // inställningar (se PREFS_KEY) precis som budget/radie, så valet finns
-  // kvar nästa gång — men påverkar bara lägen som faktiskt frågar om det.
-  openNowOnly: false,
-  vegetarianOnly: false,
   // Steg 4 · Vibe: antingen en förvald preset ("preset") eller en egen
   // text som tolkats av analyzeVibeText() ("custom"). vibeTags används av
   // scoreWithVibe()/tagBonus() för att vikta matchningarna.
@@ -1114,8 +1097,6 @@ function savePrefs(partial){
   if(typeof saved.budgetAmount === 'number') state.budgetAmount = saved.budgetAmount;
   if(typeof saved.radius === 'number') state.radius = saved.radius;
   if(typeof saved.adventure === 'number') state.adventure = saved.adventure;
-  if(typeof saved.openNowOnly === 'boolean') state.openNowOnly = saved.openNowOnly;
-  if(typeof saved.vegetarianOnly === 'boolean') state.vegetarianOnly = saved.vegetarianOnly;
 })();
 
 const el = {
@@ -1250,8 +1231,6 @@ async function handleAuthChange(user){
         if(typeof cloud.prefs.budgetAmount === 'number') state.budgetAmount = cloud.prefs.budgetAmount;
         if(typeof cloud.prefs.radius === 'number') state.radius = cloud.prefs.radius;
         if(typeof cloud.prefs.adventure === 'number') state.adventure = cloud.prefs.adventure;
-        if(typeof cloud.prefs.openNowOnly === 'boolean') state.openNowOnly = cloud.prefs.openNowOnly;
-        if(typeof cloud.prefs.vegetarianOnly === 'boolean') state.vegetarianOnly = cloud.prefs.vegetarianOnly;
       }
       if(state.showFavorites) renderFavorites();
     } else {
@@ -1346,8 +1325,6 @@ function resetPrefsToDefault(){
   try{ localStorage.removeItem(PREFS_KEY); }catch(e){}
   state.budgetAmount = 300;
   state.radius = 3;
-  state.openNowOnly = false;
-  state.vegetarianOnly = false;
   syncToCloud();
   renderAccount();
 }
@@ -1401,7 +1378,7 @@ function renderAccount(){
 
     ${(typeof prefs.budgetAmount === 'number' || typeof prefs.radius === 'number') ? `
     <p class="account-prefs-note">
-      Sparade standardval: ${typeof prefs.budgetAmount === 'number' ? `~${prefs.budgetAmount} kr` : 'ingen budget'}${typeof prefs.radius === 'number' ? ` · ${prefs.radius.toFixed(1)} km radie` : ''}${prefs.openNowOnly ? ' · bara öppna nu' : ''}${prefs.vegetarianOnly ? ' · vegetariskt/veganskt' : ''}
+      Sparade standardval: ${typeof prefs.budgetAmount === 'number' ? `~${prefs.budgetAmount} kr` : 'ingen budget'}${typeof prefs.radius === 'number' ? ` · ${prefs.radius.toFixed(1)} km radie` : ''}
     </p>` : ''}
 
     <div class="account-actions">
@@ -1779,6 +1756,20 @@ function renderHome(){
   });
 }
 
+// Lagt till en gång, centralt, istället för i varje enskild renderX() —
+// varje quiz-steg (steg 2 och uppåt) får därmed en "Tillbaka"-knapp gratis.
+// Tidigare svar (budget/radie/vibe/plats) ligger redan kvar i state, så ett
+// steg tillbaka tappar inget — reglagen/valen visar bara det man redan
+// svarat.
+function addBackButton(){
+  const btn = document.createElement('button');
+  btn.className = 'btn btn-ghost';
+  btn.style.marginTop = '8px';
+  btn.textContent = '← Tillbaka';
+  btn.addEventListener('click', () => { state.step--; render(); });
+  el.card.appendChild(btn);
+}
+
 function render(){
   if(state.showAccount){
     renderAccount();
@@ -1806,6 +1797,7 @@ function render(){
   el.dataNote.textContent = CONFIG.USE_LIVE_DATA ? "" : "Visar just nu exempeldata — riktiga platser kopplas på senare.";
   if(state.step < flow.steps.length){
     flow.steps[state.step]();
+    if(state.step > 0) addBackButton();
   } else {
     renderLoadingGeneric(flow);
   }
@@ -2163,22 +2155,9 @@ function renderRadius(){
   el.card.innerHTML = `
     <div class="eyebrow">Steg 3 · Sträcka</div>
     <h1>Hur långt kan ni <em>tänkas gå?</em></h1>
-    <p class="lead">Dra i reglaget för hur stort område vi ska scanna av.</p>
+    <p class="lead">Dra i reglaget för hur stort område vi ska scanna av. Öppna ställen visas alltid före stängda.</p>
     <input type="range" min="${RADIUS_MIN}" max="${RADIUS_MAX}" step="0.5" value="${state.radius}" id="radiusRange" aria-label="Sökradie i kilometer">
     <div class="range-val"><span>0,5 km</span><b id="radiusVal">${radiusValueLabel(state.radius)}</b><span>50 km</span></div>
-
-    <div class="field-label">Öppettider</div>
-    <div class="pill-row" id="openNowRow">
-      <div class="pill${!state.openNowOnly ? ' selected' : ''}" data-v="false">Alla ställen</div>
-      <div class="pill${state.openNowOnly ? ' selected' : ''}" data-v="true">Bara öppna nu</div>
-    </div>
-
-    <div class="field-label">Kost</div>
-    <div class="pill-row" id="vegRow">
-      <div class="pill${!state.vegetarianOnly ? ' selected' : ''}" data-v="false">Oviktigt</div>
-      <div class="pill${state.vegetarianOnly ? ' selected' : ''}" data-v="true">Vegetariskt/veganskt</div>
-    </div>
-
     <div class="spacer"></div>
     <button class="btn btn-primary" id="nextBtn">Nästa</button>
   `;
@@ -2188,22 +2167,8 @@ function renderRadius(){
     state.radius = parseFloat(range.value);
     valEl.textContent = radiusValueLabel(state.radius);
   });
-  document.getElementById('openNowRow').querySelectorAll('.pill').forEach(pill => {
-    pill.addEventListener('click', () => {
-      state.openNowOnly = pill.dataset.v === 'true';
-      document.getElementById('openNowRow').querySelectorAll('.pill').forEach(p => p.classList.remove('selected'));
-      pill.classList.add('selected');
-    });
-  });
-  document.getElementById('vegRow').querySelectorAll('.pill').forEach(pill => {
-    pill.addEventListener('click', () => {
-      state.vegetarianOnly = pill.dataset.v === 'true';
-      document.getElementById('vegRow').querySelectorAll('.pill').forEach(p => p.classList.remove('selected'));
-      pill.classList.add('selected');
-    });
-  });
   document.getElementById('nextBtn').addEventListener('click', () => {
-    savePrefs({ radius: state.radius, openNowOnly: state.openNowOnly, vegetarianOnly: state.vegetarianOnly });
+    savePrefs({ radius: state.radius });
     state.step++;
     render();
   });
@@ -2669,13 +2634,13 @@ async function computeEveningPlan(state){
   const raw = await PlacesProvider.getPlaces({
     coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
   });
-  const places = applyPracticalFilters(raw, state);
+  const places = filterExcluded(raw);
   const usedInPlan = new Set();
   const bestInSlot = (slot) => {
     const sorted = places
       .filter(p => !usedInPlan.has(p.name))
       .map(p => ({ ...p, score: scoreWithVibe(p, state) + slotBonus(p, slot) }))
-      .sort((a,b) => b.score - a.score);
+      .sort(compareByOpenThenScore);
     const pick = pickUnseen(sorted, state, 1)[0] || sorted[0] || null;
     if(pick) usedInPlan.add(pick.name);
     return pick;
@@ -2786,11 +2751,11 @@ async function computeDateMatches(state){
   const raw = await PlacesProvider.getPlaces({
     coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
   });
-  const places = applyPracticalFilters(raw, state);
+  const places = filterExcluded(raw);
   const bonusTags = [...DATE_BONUS_TAGS, ...(state.vibeTags || [])];
   const sorted = places
     .map(p => ({ ...p, score: scorePlace(p, state) * 0.75 + tagBonus(p, bonusTags) * 0.25 }))
-    .sort((a,b) => b.score - a.score);
+    .sort(compareByOpenThenScore);
   return pickUnseen(sorted, state);
 }
 
