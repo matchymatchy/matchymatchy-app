@@ -200,6 +200,80 @@
   .footer-note{ text-align:center; font-size:11.5px; color: var(--muted); margin-top:18px; line-height:1.5; }
   .data-note{ text-align:center; font-size:10.5px; color: var(--muted); opacity:0.6; margin-top:6px; }
 
+  /* --- Juridiskt: sidfotslänkar, modal och samtyckesbanner --- */
+  .legal-footer{
+    display:flex; flex-wrap:wrap; justify-content:center; align-items:center;
+    gap:8px; margin-top:16px;
+  }
+  .legal-link{
+    background:none; border:none; padding:4px 2px; cursor:pointer;
+    font-family:inherit; font-size:11.5px; font-weight:600;
+    color: var(--muted); text-decoration: underline; text-underline-offset:2px;
+  }
+  .legal-link:hover, .legal-link:focus-visible{ color: var(--accent-2); }
+  .legal-dot{ color: var(--line); font-size:11px; }
+  .legal-copyright{ text-align:center; font-size:10.5px; color: var(--muted); opacity:0.55; margin-top:6px; }
+
+  .legal-overlay{
+    position:fixed; inset:0; background: rgba(15,6,13,0.72);
+    display:none; align-items:flex-end; justify-content:center;
+    padding: 0; z-index:100;
+  }
+  .legal-overlay.open{ display:flex; }
+  @media (min-width: 480px){
+    .legal-overlay{ align-items:center; padding:24px; }
+  }
+  .legal-modal{
+    background: var(--card); color: var(--cream);
+    width:100%; max-width:440px; max-height:86vh; overflow-y:auto;
+    border-radius: 20px 20px 0 0;
+    border: 1px solid var(--line);
+    padding: 24px 22px 28px;
+    position:relative;
+    animation: legalIn .2s ease both;
+  }
+  @media (min-width: 480px){
+    .legal-modal{ border-radius:20px; }
+  }
+  @keyframes legalIn{ from{ transform: translateY(16px); opacity:0; } to{ transform: translateY(0); opacity:1; } }
+  .legal-close{
+    position:absolute; top:14px; right:14px;
+    width:32px; height:32px; border-radius:50%;
+    background: rgba(251,243,233,0.08); border:1px solid var(--line);
+    color: var(--cream); font-size:15px; cursor:pointer;
+    display:flex; align-items:center; justify-content:center;
+  }
+  .legal-modal h2{
+    font-family:'Fraunces', serif; font-weight:600; font-size:21px;
+    margin:0 18px 14px 0;
+  }
+  .legal-body{ font-size:13.5px; line-height:1.65; color: var(--muted); }
+  .legal-body h3{ color: var(--cream); font-size:14.5px; margin:18px 0 6px; }
+  .legal-body h3:first-child{ margin-top:0; }
+  .legal-body p{ margin:0 0 10px; }
+  .legal-body ul{ margin:0 0 10px; padding-left:18px; }
+  .legal-body li{ margin-bottom:4px; }
+  .legal-body a{ color: var(--accent-2); }
+  .legal-updated{ font-size:11px; opacity:0.7; margin-top:16px; }
+
+  .consent-banner{
+    position:fixed; left:0; right:0; bottom:0; z-index:90;
+    display:none; justify-content:center;
+    padding: 12px 16px calc(12px + env(safe-area-inset-bottom));
+    background: linear-gradient(180deg, transparent, rgba(15,6,13,0.55) 20%);
+  }
+  .consent-banner.show{ display:flex; }
+  .consent-inner{
+    width:100%; max-width:420px;
+    background: var(--card); border:1px solid var(--line); border-radius:16px;
+    padding:14px 16px; box-shadow: 0 10px 30px rgba(0,0,0,0.35);
+    display:flex; flex-direction:column; gap:10px;
+  }
+  .consent-inner p{ margin:0; font-size:12.5px; line-height:1.55; color: var(--muted); }
+  .consent-inner .legal-link{ color: var(--accent-2); padding:0; }
+  .consent-actions{ display:flex; gap:8px; }
+  .consent-actions .btn{ flex:1; padding:0 14px; height:40px; font-size:13px; }
+
   input[type=range]{
     -webkit-appearance:none; width:100%; height:4px; border-radius:4px;
     background: var(--line); margin: 18px 0 6px;
@@ -339,6 +413,37 @@
   <div class="card" id="card"></div>
   <div class="footer-note">matchymatchy scannar platser i din närhet och motiverar varje matchning — inga fler oändliga listor att bläddra igenom.</div>
   <div class="data-note" id="dataNote"></div>
+  <div class="legal-footer">
+    <button type="button" class="legal-link" data-legal="terms">Villkor</button>
+    <span class="legal-dot">·</span>
+    <button type="button" class="legal-link" data-legal="privacy">Integritetspolicy</button>
+    <span class="legal-dot">·</span>
+    <button type="button" class="legal-link" data-legal="cookies">Cookies &amp; lagring</button>
+    <span class="legal-dot">·</span>
+    <button type="button" class="legal-link" data-legal="contact">Kontakt</button>
+  </div>
+  <div class="legal-copyright">© <span id="legalYear"></span> matchymatchy</div>
+</div>
+
+<div class="legal-overlay" id="legalOverlay" role="dialog" aria-modal="true" aria-labelledby="legalTitle">
+  <div class="legal-modal">
+    <button type="button" class="legal-close" id="legalClose" aria-label="Stäng">✕</button>
+    <h2 id="legalTitle"></h2>
+    <div class="legal-body" id="legalBody"></div>
+  </div>
+</div>
+
+<div class="consent-banner" id="consentBanner">
+  <div class="consent-inner">
+    <p>
+      Vi använder platsen du väljer att dela för att hitta ställen nära dig, och sparar favoriter lokalt i din
+      egen webbläsare. Inga spårnings- eller annonscookies används.
+      <button type="button" class="legal-link" data-legal="cookies">Läs mer</button>
+    </p>
+    <div class="consent-actions">
+      <button type="button" class="btn btn-primary" id="consentOkBtn">Okej, jag förstår</button>
+    </div>
+  </div>
 </div>
 
 <script>
@@ -761,7 +866,14 @@ const el = {
   card: document.getElementById('card'),
   dataNote: document.getElementById('dataNote'),
   favToggleBtn: document.getElementById('favToggleBtn'),
-  favCount: document.getElementById('favCount')
+  favCount: document.getElementById('favCount'),
+  legalYear: document.getElementById('legalYear'),
+  legalOverlay: document.getElementById('legalOverlay'),
+  legalClose: document.getElementById('legalClose'),
+  legalTitle: document.getElementById('legalTitle'),
+  legalBody: document.getElementById('legalBody'),
+  consentBanner: document.getElementById('consentBanner'),
+  consentOkBtn: document.getElementById('consentOkBtn')
 };
 
 /* =========================================================================
@@ -840,6 +952,126 @@ function renderFavorites(){
 el.brandHome.addEventListener('click', goHome);
 el.favToggleBtn.addEventListener('click', () => { state.showFavorites = true; render(); });
 updateFavCount();
+
+/* =========================================================================
+   JURIDISKT: villkor, integritetspolicy, cookies/lagring, kontakt
+   matchymatchy körs helt i webbläsaren (ingen egen server som lagrar
+   personuppgifter) — texterna nedan speglar det ärligt. VIKTIGT: fält
+   inom [hakparenteser] är platshållare som måste bytas ut mot riktiga
+   uppgifter (t.ex. e-postadress) innan sajten görs publik på riktigt.
+   ========================================================================= */
+const LEGAL_LAST_UPDATED = "7 september 2026";
+
+const LEGAL_CONTENT = {
+  terms: {
+    title: "Användarvillkor",
+    body: `
+      <h3>Om tjänsten</h3>
+      <p>matchymatchy är ett kostnadsfritt verktyg som föreslår restauranger, barer och caféer i din närhet utifrån svaren du ger (t.ex. budget, avstånd och stämning). Förslagen bygger på platsdata från Google.</p>
+      <h3>Inget konto krävs</h3>
+      <p>Du behöver inte skapa något konto för att använda matchymatchy, och inga köp eller betalningar sker via tjänsten.</p>
+      <h3>Inga garantier</h3>
+      <p>Uppgifter om öppettider, priser, tillgänglighet och liknande hämtas från tredje part och kan ha hunnit ändras. Kontrollera alltid direkt med stället innan du bokar eller besöker det. matchymatchy garanterar inte att förslagen är korrekta, kompletta eller uppdaterade.</p>
+      <h3>Ansvarsbegränsning</h3>
+      <p>Tjänsten tillhandahålls i befintligt skick. I den utsträckning svensk lag tillåter ansvarar matchymatchy inte för skador, kostnader eller besvikelser som uppstår till följd av att du använder tjänsten eller besöker ett föreslaget ställe.</p>
+      <h3>Immateriella rättigheter</h3>
+      <p>Design, text och funktionalitet på matchymatchy tillhör matchymatchy. Platsinformation (namn, betyg, typ m.m.) tillhör respektive källa, i första hand Google.</p>
+      <h3>Ändringar</h3>
+      <p>Villkoren kan uppdateras då och då. Den senaste versionen gäller alltid och finns tillgänglig här.</p>
+      <h3>Tillämplig lag</h3>
+      <p>Svensk lag tillämpas på dessa villkor.</p>
+      <div class="legal-updated">Senast uppdaterad: ${LEGAL_LAST_UPDATED}</div>
+    `
+  },
+  privacy: {
+    title: "Integritetspolicy",
+    body: `
+      <h3>Vem är ansvarig</h3>
+      <p>[Ditt namn eller företagsnamn] ansvarar för matchymatchy och behandlingen som beskrivs här. Kontakta oss via [e-postadress] vid frågor.</p>
+      <h3>Detta samlar vi in — och detta gör vi inte</h3>
+      <ul>
+        <li><strong>Din plats:</strong> endast om du aktivt väljer att dela den (via webbläsarens platsbehörighet eller genom att skriva in en adress). Koordinaterna skickas till Google för att hitta ställen nära dig, men lagras aldrig av oss — matchymatchy har ingen egen server som sparar besökardata.</li>
+        <li><strong>Favoriter:</strong> sparas lokalt i din egen webbläsare (så kallad local storage) om du trycker på hjärtat på ett förslag. De skickas aldrig till oss och försvinner om du rensar webbläsarens data.</li>
+        <li><strong>Inga konton, ingen spårning:</strong> vi samlar inte in namn, e-post eller liknande, och använder inga cookies för reklam eller spårning.</li>
+      </ul>
+      <h3>Tredje part: Google</h3>
+      <p>Sökningar efter platser och länkar till Google Maps går via Googles tjänster (Places API och Google Maps). Google behandlar då den plats du sökt utifrån enligt sin egen integritetspolicy, som du hittar på <a href="https://policies.google.com/privacy" target="_blank" rel="noopener">policies.google.com/privacy</a>.</p>
+      <h3>Rättslig grund</h3>
+      <p>Behandlingen av din plats sker med stöd av ditt samtycke — du väljer själv om och när du delar den, varje gång du använder tjänsten.</p>
+      <h3>Dina rättigheter</h3>
+      <p>Eftersom vi inte lagrar personuppgifter på någon server finns det inget register hos oss att begära ut eller rätta. Du kan när som helst radera lokalt sparade favoriter genom att rensa webbläsarens data för sajten, eller via papperskorgen i favoritlistan. Vid frågor är du välkommen att höra av dig till [e-postadress].</p>
+      <h3>Ändringar</h3>
+      <p>Vi kan uppdatera denna policy om tjänsten förändras. Datumet nedan visar senaste uppdatering.</p>
+      <div class="legal-updated">Senast uppdaterad: ${LEGAL_LAST_UPDATED}</div>
+    `
+  },
+  cookies: {
+    title: "Cookies & lokal lagring",
+    body: `
+      <h3>Korta svaret</h3>
+      <p>matchymatchy sätter inga cookies för spårning, analys eller reklam. Det enda som sparas i din webbläsare är sådant som gör tjänsten användbar för dig.</p>
+      <h3>Det vi faktiskt sparar lokalt</h3>
+      <ul>
+        <li><strong>Favoriter</strong> (local storage) — dina sparade ställen, så de finns kvar nästa gång du öppnar matchymatchy.</li>
+        <li><strong>Att du sett den här rutan</strong> (local storage) — så vi inte visar samtyckesbannern varje gång.</li>
+      </ul>
+      <p>Ingen av dessa uppgifter skickas till oss eller till tredje part — de ligger enbart i din egen webbläsare tills du raderar dem.</p>
+      <h3>Platsdelning</h3>
+      <p>När du väljer att dela din plats används webbläsarens inbyggda platsbehörighet (geolocation), inte en cookie. Den frågas efter varje gång tjänsten behöver den och sparas inte mellan besök.</p>
+      <h3>Externa tjänster</h3>
+      <p>När resultat hämtas via Googles Places API, eller när du klickar dig vidare till Google Maps, kan Google sätta egna cookies enligt sin cookiepolicy. Det ligger utanför vår kontroll — se Googles egen information på <a href="https://policies.google.com/technologies/cookies" target="_blank" rel="noopener">policies.google.com/technologies/cookies</a>.</p>
+      <h3>Rensa lokalt sparad data</h3>
+      <p>Du kan när som helst radera favoriter och den här bannerns "sett"-status genom att rensa webbläsarens data för sajten, i din webbläsares inställningar.</p>
+      <div class="legal-updated">Senast uppdaterad: ${LEGAL_LAST_UPDATED}</div>
+    `
+  },
+  contact: {
+    title: "Kontakt",
+    body: `
+      <h3>Hör av dig</h3>
+      <p>Frågor, feedback eller något som inte stämmer i ett förslag? Vi hör gärna av oss.</p>
+      <p>E-post: <a href="mailto:[e-postadress]">[e-postadress]</a></p>
+      <p>matchymatchy drivs av [ditt namn / företagsnamn], [ort], Sverige.</p>
+    `
+  }
+};
+
+function openLegal(key){
+  const doc = LEGAL_CONTENT[key];
+  if(!doc) return;
+  el.legalTitle.textContent = doc.title;
+  el.legalBody.innerHTML = doc.body;
+  el.legalOverlay.classList.add('open');
+  el.legalBody.scrollTop = 0;
+}
+function closeLegal(){
+  el.legalOverlay.classList.remove('open');
+}
+
+// Delegerad klickhantering — samma [data-legal]-knappar dyker upp både i
+// sidfoten och i samtyckesbannern.
+document.addEventListener('click', (e) => {
+  const trigger = e.target.closest('[data-legal]');
+  if(trigger){ openLegal(trigger.dataset.legal); }
+});
+el.legalClose.addEventListener('click', closeLegal);
+el.legalOverlay.addEventListener('click', (e) => { if(e.target === el.legalOverlay) closeLegal(); });
+document.addEventListener('keydown', (e) => { if(e.key === 'Escape') closeLegal(); });
+
+if(el.legalYear) el.legalYear.textContent = new Date().getFullYear();
+
+// Enkel, icke-påträngande infobanner om plats/lokal lagring — visas en
+// gång tills den kvitteras, sparat i local storage (se cookies-texten ovan).
+const CONSENT_KEY = 'matchymatchy_notice_seen';
+if(el.consentBanner && !localStorage.getItem(CONSENT_KEY)){
+  el.consentBanner.classList.add('show');
+}
+if(el.consentOkBtn){
+  el.consentOkBtn.addEventListener('click', () => {
+    try{ localStorage.setItem(CONSENT_KEY, '1'); }catch(e){}
+    el.consentBanner.classList.remove('show');
+  });
+}
 
 function goHome(){
   if(state.mode === 'home' && state.step === 0 && !state.showFavorites) return;
