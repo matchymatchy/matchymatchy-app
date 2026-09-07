@@ -1179,7 +1179,10 @@ function toggleAccount(){
     if(confirm('Logga ut från matchymatchy?')) fbAuth.signOut();
   } else {
     fbAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider())
-      .catch(e => console.warn("matchymatchy: inloggning misslyckades.", e));
+      .catch(e => {
+        console.warn("matchymatchy: inloggning misslyckades.", e);
+        alert("Inloggningen misslyckades: " + e.code + "\n" + e.message);
+      });
   }
 }
 
