@@ -380,6 +380,17 @@
 
   .top-bar{ display:flex; align-items:center; justify-content:space-between; margin-bottom:22px; }
   .top-bar .brand{ margin-bottom:0; }
+  .top-bar-actions{ display:flex; align-items:center; gap:8px; }
+  .account-btn{
+    display:flex; align-items:center; gap:6px;
+    background: rgba(251,243,233,0.06); border:1px solid var(--line); border-radius:100px;
+    padding:7px 12px; color: var(--cream); font-weight:700; font-size:13px; cursor:pointer;
+    font-family:'Plus Jakarta Sans', sans-serif; max-width:120px;
+  }
+  .account-btn #accountLabel{ overflow:hidden; text-overflow:ellipsis; white-space:nowrap; }
+  .account-btn.signed-in{ border-color: rgba(127,191,160,0.4); color: var(--mint); }
+  .account-btn:active{ transform: scale(0.96); }
+  .account-btn[hidden]{ display:none; }
   .fav-toggle{
     display:flex; align-items:center; gap:6px;
     background: rgba(251,243,233,0.06); border:1px solid var(--line); border-radius:100px;
@@ -403,6 +414,9 @@
     background: rgba(251,243,233,0.04); border:1px solid var(--line); border-radius:14px;
     padding:12px 14px; margin-bottom:10px;
   }
+  .fav-list-item.clickable{ cursor:pointer; transition: border-color .15s ease, transform .15s ease; }
+  .fav-list-item.clickable:hover, .fav-list-item.clickable:focus-visible{ border-color: var(--accent-2); }
+  .fav-list-item.clickable:active{ transform: scale(0.99); }
   .fav-list-item .fli-name{ font-family:'Fraunces', serif; font-weight:600; font-size:15.5px; }
   .fav-list-item .fli-type{ font-size:12px; color: var(--muted); }
 
@@ -424,9 +438,14 @@
 <div class="phone">
   <div class="top-bar">
     <div class="brand" id="brandHome"><span class="dot"></span><span>matchy<b>matchy</b></span></div>
-    <button class="fav-toggle" id="favToggleBtn" type="button" aria-label="Visa sparade favoriter">
-      <span class="fav-heart">♥</span><span id="favCount">0</span>
-    </button>
+    <div class="top-bar-actions">
+      <button class="account-btn" id="accountBtn" type="button" aria-label="Logga in">
+        <span id="accountLabel">Logga in</span>
+      </button>
+      <button class="fav-toggle" id="favToggleBtn" type="button" aria-label="Visa sparade favoriter">
+        <span class="fav-heart">♥</span><span id="favCount">0</span>
+      </button>
+    </div>
   </div>
   <div class="mode-tabs" id="modeTabs"></div>
   <div class="steps" id="steps"></div>
@@ -466,6 +485,9 @@
   </div>
 </div>
 
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-app-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-auth-compat.js"></script>
+<script src="https://www.gstatic.com/firebasejs/10.13.0/firebase-firestore-compat.js"></script>
 <script>
 /* =========================================================================
    KONFIG
@@ -476,8 +498,20 @@
    ========================================================================= */
 const CONFIG = {
   USE_LIVE_DATA: true,
-  GOOGLE_MAPS_API_KEY: "AIzaSyAhrCLSTbf2flLPd7w965Xm-NqIoYPag7U"
+  GOOGLE_MAPS_API_KEY: "AIzaSyAhrCLSTbf2flLPd7w965Xm-NqIoYPag7U",
+  // Fyll i när ni skapat ett gratis Firebase-projekt (se instruktionerna ni
+  // fick av Claude). Så länge det här är tomt fungerar sajten precis som
+  // innan — inloggningsknappen visas bara helt enkelt inte.
+  FIREBASE: {
+    apiKey: "AIzaSyB67msorEaPEe6ZaXyyLb-CeS7MpzOU7SU",
+    authDomain: "matchymatchy-df09e.firebaseapp.com",
+    projectId: "matchymatchy-df09e",
+    storageBucket: "matchymatchy-df09e.firebasestorage.app",
+    messagingSenderId: "253326579799",
+    appId: "1:253326579799:web:6cf89f72b1bdf918eeeb12"
+  }
 };
+const FIREBASE_ENABLED = !!CONFIG.FIREBASE.apiKey;
 
 /* =========================================================================
    PLACES PROVIDER
@@ -984,6 +1018,29 @@ const state = {
   seenNames: []
 };
 
+/* =========================================================================
+   INSTÄLLNINGAR (sparas lokalt, och i molnet om man är inloggad)
+   Kommer ihåg var ni senast lämnade budget/radie/äventyrsnivå så reglagen
+   startar där ni slutade, istället för på samma standardvärden varje gång.
+   ========================================================================= */
+const PREFS_KEY = 'matchymatchy_prefs';
+function getPrefs(){
+  try{ return JSON.parse(localStorage.getItem(PREFS_KEY)) || {}; }
+  catch(e){ return {}; }
+}
+function savePrefs(partial){
+  const merged = { ...getPrefs(), ...partial };
+  try{ localStorage.setItem(PREFS_KEY, JSON.stringify(merged)); }catch(e){}
+  syncToCloud();
+  return merged;
+}
+(function applySavedPrefs(){
+  const saved = getPrefs();
+  if(typeof saved.budgetAmount === 'number') state.budgetAmount = saved.budgetAmount;
+  if(typeof saved.radius === 'number') state.radius = saved.radius;
+  if(typeof saved.adventure === 'number') state.adventure = saved.adventure;
+})();
+
 const el = {
   brandHome: document.getElementById('brandHome'),
   modeTabs: document.getElementById('modeTabs'),
@@ -992,6 +1049,8 @@ const el = {
   dataNote: document.getElementById('dataNote'),
   favToggleBtn: document.getElementById('favToggleBtn'),
   favCount: document.getElementById('favCount'),
+  accountBtn: document.getElementById('accountBtn'),
+  accountLabel: document.getElementById('accountLabel'),
   legalYear: document.getElementById('legalYear'),
   legalOverlay: document.getElementById('legalOverlay'),
   legalClose: document.getElementById('legalClose'),
@@ -1015,18 +1074,113 @@ function getFavorites(){
 function saveFavorites(list){
   try{ localStorage.setItem(FAVORITES_KEY, JSON.stringify(list)); }catch(e){}
   updateFavCount();
+  syncToCloud();
 }
 function isFavorite(name){ return getFavorites().some(f => f.name === name); }
 function toggleFavorite(place){
   const list = getFavorites();
   const idx = list.findIndex(f => f.name === place.name);
   if(idx >= 0) list.splice(idx, 1);
-  else list.push({ name: place.name, type: place.type, tags: place.tags || [], trait: place.trait || '' });
+  else list.push({
+    name: place.name, type: place.type, tags: place.tags || [], trait: place.trait || '',
+    lat: typeof place.lat === "number" ? place.lat : null,
+    lng: typeof place.lng === "number" ? place.lng : null,
+    placeId: place.placeId || null
+  });
   saveFavorites(list);
   return idx < 0; // true om den precis lades till
 }
 function updateFavCount(){
   if(el.favCount) el.favCount.textContent = getFavorites().length;
+}
+
+/* =========================================================================
+   KONTO (valfritt — sajten fungerar helt utan detta)
+   Google-inloggning via Firebase, bara för att synka favoriter och
+   inställningar mellan enheter. Så länge CONFIG.FIREBASE.apiKey är tomt
+   görs ingenting alls här och kontoknappen döljs — allt funkar som innan,
+   lokalt i webbläsaren.
+   ========================================================================= */
+let fbAuth = null, fbDb = null, currentUser = null;
+
+function initFirebase(){
+  if(!FIREBASE_ENABLED) return;
+  try{
+    firebase.initializeApp(CONFIG.FIREBASE);
+    fbAuth = firebase.auth();
+    fbDb = firebase.firestore();
+    fbAuth.onAuthStateChanged(handleAuthChange);
+  }catch(e){
+    console.warn("matchymatchy: kunde inte starta Firebase.", e);
+  }
+}
+
+async function handleAuthChange(user){
+  currentUser = user;
+  updateAccountUI();
+  if(!user) return;
+  // Vid inloggning: hämta en ev. sparad molnprofil och låt den bli
+  // sanningen för den här enheten (favoriter + inställningar).
+  try{
+    const doc = await fbDb.collection('users').doc(user.uid).get();
+    if(doc.exists){
+      const cloud = doc.data() || {};
+      if(Array.isArray(cloud.favorites)){
+        localStorage.setItem(FAVORITES_KEY, JSON.stringify(cloud.favorites));
+        updateFavCount();
+      }
+      if(cloud.prefs){
+        localStorage.setItem(PREFS_KEY, JSON.stringify(cloud.prefs));
+        if(typeof cloud.prefs.budgetAmount === 'number') state.budgetAmount = cloud.prefs.budgetAmount;
+        if(typeof cloud.prefs.radius === 'number') state.radius = cloud.prefs.radius;
+        if(typeof cloud.prefs.adventure === 'number') state.adventure = cloud.prefs.adventure;
+      }
+      if(state.showFavorites) renderFavorites();
+    } else {
+      // Första inloggningen på det här kontot — spara det som redan finns
+      // lokalt som en utgångspunkt i molnet.
+      syncToCloud();
+    }
+  }catch(e){
+    console.warn("matchymatchy: kunde inte läsa molnprofil.", e);
+  }
+}
+
+async function syncToCloud(){
+  if(!FIREBASE_ENABLED || !fbDb || !currentUser) return;
+  try{
+    await fbDb.collection('users').doc(currentUser.uid).set({
+      favorites: getFavorites(),
+      prefs: getPrefs(),
+      updatedAt: new Date().toISOString()
+    }, { merge: true });
+  }catch(e){
+    console.warn("matchymatchy: kunde inte spara till molnet.", e);
+  }
+}
+
+function updateAccountUI(){
+  if(!el.accountBtn) return;
+  if(!FIREBASE_ENABLED){ el.accountBtn.hidden = true; return; }
+  if(currentUser){
+    el.accountBtn.classList.add('signed-in');
+    el.accountLabel.textContent = currentUser.displayName ? currentUser.displayName.split(' ')[0] : 'Inloggad';
+    el.accountBtn.setAttribute('aria-label', 'Logga ut');
+  } else {
+    el.accountBtn.classList.remove('signed-in');
+    el.accountLabel.textContent = 'Logga in';
+    el.accountBtn.setAttribute('aria-label', 'Logga in med Google');
+  }
+}
+
+function toggleAccount(){
+  if(!FIREBASE_ENABLED) return;
+  if(currentUser){
+    if(confirm('Logga ut från matchymatchy?')) fbAuth.signOut();
+  } else {
+    fbAuth.signInWithPopup(new firebase.auth.GoogleAuthProvider())
+      .catch(e => console.warn("matchymatchy: inloggning misslyckades.", e));
+  }
 }
 
 function renderFavorites(){
@@ -1050,16 +1204,31 @@ function renderFavorites(){
     const frag = document.createDocumentFragment();
     favorites.forEach(f => {
       const item = document.createElement('div');
-      item.className = 'fav-list-item';
+      item.className = 'fav-list-item clickable';
+      item.tabIndex = 0;
+      item.setAttribute('role', 'button');
+      item.setAttribute('aria-label', `Öppna ${f.name} i Google Maps`);
       item.innerHTML = `
         <div><div class="fli-name">${f.name}</div><div class="fli-type">${f.type}</div></div>
         <button class="fav-btn active" data-remove="${f.name}" aria-label="Ta bort favorit">♥</button>
       `;
+      const openMaps = () => window.open(mapsUrlFor(f), '_blank', 'noopener');
+      item.addEventListener('click', (e) => {
+        if(e.target.closest('[data-remove]')) return;
+        openMaps();
+      });
+      item.addEventListener('keydown', (e) => {
+        if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-remove]')){
+          e.preventDefault();
+          openMaps();
+        }
+      });
       frag.appendChild(item);
     });
     el.card.appendChild(frag);
     el.card.querySelectorAll('[data-remove]').forEach(btn => {
-      btn.addEventListener('click', () => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
         saveFavorites(getFavorites().filter(f => f.name !== btn.dataset.remove));
         renderFavorites();
       });
@@ -1076,6 +1245,9 @@ function renderFavorites(){
 
 el.brandHome.addEventListener('click', goHome);
 el.favToggleBtn.addEventListener('click', () => { state.showFavorites = true; render(); });
+el.accountBtn.addEventListener('click', toggleAccount);
+initFirebase();
+updateAccountUI();
 updateFavCount();
 
 /* =========================================================================
@@ -1554,6 +1726,7 @@ function renderBudget(){
   });
   document.getElementById('nextBtn').addEventListener('click', () => {
     state.budget = amountToTier(state.budgetAmount);
+    savePrefs({ budgetAmount: state.budgetAmount });
     state.step++;
     render();
   });
@@ -1592,7 +1765,11 @@ function renderRadius(){
     state.radius = parseFloat(range.value);
     valEl.textContent = radiusValueLabel(state.radius);
   });
-  document.getElementById('nextBtn').addEventListener('click', () => { state.step++; render(); });
+  document.getElementById('nextBtn').addEventListener('click', () => {
+    savePrefs({ radius: state.radius });
+    state.step++;
+    render();
+  });
 }
 
 /* =========================================================================
