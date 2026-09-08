@@ -2292,7 +2292,7 @@ function renderVibe(){
     </div>
     <div class="loc-or">eller skriv er egen</div>
     <div class="loc-search-row">
-      <input type="text" class="text-input" id="vibeInput" placeholder="T.ex. nåt med uteservering, gärna i solen" value="${savedText}">
+      <input type="text" class="text-input" id="vibeInput" placeholder="T.ex. uteservering" value="${savedText}">
       <button class="btn btn-search" id="vibeAnalyzeBtn" type="button" ${savedText ? '' : 'disabled'}>Hitta matchningar</button>
     </div>
     <p class="loc-status" id="vibeStatus">${state.vibeSource==='custom' ? vibeCustomStatusText(state.customVibeText, state.vibeTags) : ''}</p>
