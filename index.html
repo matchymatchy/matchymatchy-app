@@ -10,8 +10,14 @@
 <meta property="og:title" content="matchymatchy">
 <meta property="og:description" content="Sluta bläddra, börja matcha — hitta något att göra ikväll utan att leta själva.">
 <meta property="og:type" content="website">
+<meta name="twitter:card" content="summary">
+<meta name="twitter:title" content="matchymatchy">
+<meta name="twitter:description" content="Sluta bläddra, börja matcha — hitta något att göra ikväll utan att leta själva.">
+<link rel="canonical" href="https://matchymatchy.github.io/matchymatchy-app/">
 <link rel="preconnect" href="https://fonts.googleapis.com">
-<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,400;0,9..144,600;1,9..144,500;1,9..144,600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link rel="preconnect" href="https://places.googleapis.com">
+<link href="https://fonts.googleapis.com/css2?family=Fraunces:ital,opsz,wght@0,9..144,600;1,9..144,600&family=Plus+Jakarta+Sans:wght@400;500;600;700;800&display=swap" rel="stylesheet">
 <style>
   :root{
     --bg: #241220;
@@ -796,9 +802,9 @@ const PlacesProvider = (() => {
     return sentence + ".";
   }
 
-  function capitalizeFirst(str){
-    return str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
-  }
+  // capitalizeFirst() lever i global scope (definieras längre ner i filen)
+  // — den här closuren kan nå den ändå, så ingen anledning att ha en andra,
+  // identisk kopia bara för PlacesProvider.
 
   function joinSv(list){
     if(list.length <= 1) return list[0] || "";
@@ -938,12 +944,12 @@ function hoursBlockHtml(p){
       <i class="hours-dot"></i>${p.openNow ? 'Öppet nu' : 'Stängt nu'}
     </span>`;
   const today = todayHoursLine(p.weekdayHours);
-  const todayText = today ? capitalizeFirstClient(today) : "";
+  const todayText = today ? capitalizeFirst(today) : "";
   const toggle = p.weekdayHours
     ? `<button type="button" class="hours-toggle" data-hours-toggle="${id}">Visa veckans tider</button>`
     : "";
   const list = p.weekdayHours
-    ? `<div class="hours-list" id="${id}" hidden>${p.weekdayHours.map(d => `<div class="hours-list-row">${capitalizeFirstClient(d)}</div>`).join('')}</div>`
+    ? `<div class="hours-list" id="${id}" hidden>${p.weekdayHours.map(d => `<div class="hours-list-row">${capitalizeFirst(d)}</div>`).join('')}</div>`
     : "";
   return `
     <div class="hours-row">
@@ -955,7 +961,7 @@ function hoursBlockHtml(p){
   `;
 }
 
-function capitalizeFirstClient(str){
+function capitalizeFirst(str){
   return str ? str.charAt(0).toUpperCase() + str.slice(1) : str;
 }
 
