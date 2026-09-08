@@ -1859,7 +1859,7 @@ function renderLocation(){
         <svg viewBox="0 0 24 24" fill="none"><path d="M12 21s7-6.2 7-11.2A7 7 0 0 0 5 9.8C5 14.8 12 21 12 21z" stroke="#ffc857" stroke-width="1.6"/><circle cx="12" cy="9.5" r="2.4" stroke="#ffc857" stroke-width="1.6"/></svg>
       </div>
     </div>
-    <p class="loc-status" id="locStatus">${cached ? `Vi har er plats från för ${minutesAgo(cached.timestamp)} min sedan` : 'Tryck för att dela din plats'}</p>
+    <p class="loc-status" id="locStatus">${cached ? `Vi har er plats för ${minutesAgo(cached.timestamp)} min sedan` : 'Tryck för att dela din plats'}</p>
     ${cached ? `
       <button class="btn btn-primary" id="useCachedLocBtn">Använd senaste platsen</button>
       <button class="btn btn-ghost" id="locBtn">Uppdatera plats</button>
