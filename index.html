@@ -3,16 +3,16 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>matchymatchy — hitta något att göra ikväll</title>
-<meta name="description" content="Svara på några snabba frågor om budget, avstånd och stämning — matchymatchy scannar omgivningen och föreslår ställen som passar er, med en motivering till varje förslag.">
+<title>matchymatchy — hitta rätt restaurang ikväll</title>
+<meta name="description" content="Svara på några snabba frågor om budget, avstånd och stämning — matchymatchy scannar omgivningen och föreslår restauranger, barer och caféer som passar er, med en motivering till varje förslag.">
 <meta name="theme-color" content="#241220">
 <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'%3E%3Ccircle cx='50' cy='50' r='46' fill='%23241220'/%3E%3Ccircle cx='50' cy='50' r='46' fill='none' stroke='%23ffc857' stroke-width='4'/%3E%3Ctext x='50' y='66' font-size='54' text-anchor='middle' fill='%23ff6b5b'%3E%E2%9D%A4%3C/text%3E%3C/svg%3E">
 <meta property="og:title" content="matchymatchy">
-<meta property="og:description" content="Sluta bläddra, börja matcha — hitta något att göra ikväll utan att leta själva.">
+<meta property="og:description" content="Sluta bläddra, börja matcha — hitta en restaurang eller bar att gå till ikväll utan att leta själva.">
 <meta property="og:type" content="website">
 <meta name="twitter:card" content="summary">
 <meta name="twitter:title" content="matchymatchy">
-<meta name="twitter:description" content="Sluta bläddra, börja matcha — hitta något att göra ikväll utan att leta själva.">
+<meta name="twitter:description" content="Sluta bläddra, börja matcha — hitta en restaurang eller bar att gå till ikväll utan att leta själva.">
 <link rel="canonical" href="https://matchymatchy.github.io/matchymatchy-app/">
 <link rel="preconnect" href="https://fonts.googleapis.com">
 <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
@@ -151,6 +151,7 @@
     flex:0 0 auto; width:auto; padding: 0 14px; font-size:13.5px;
     background: linear-gradient(120deg, var(--accent), #ff8f68); color:#241016;
   }
+  .btn-search:disabled{ opacity:0.35; pointer-events:none; }
 
   .result-card{
     background: linear-gradient(160deg, var(--card), var(--bg-alt));
@@ -523,7 +524,7 @@
 <div class="consent-banner" id="consentBanner">
   <div class="consent-inner">
     <p>
-      Vi använder platsen du väljer att dela för att hitta ställen nära dig, och sparar favoriter lokalt i din
+      Vi använder platsen du väljer att dela för att hitta restauranger nära dig, och sparar favoriter lokalt i din
       egen webbläsare. Inga spårnings- eller annonscookies används.
       <button type="button" class="legal-link" data-legal="cookies">Läs mer</button>
     </p>
@@ -677,7 +678,7 @@ const PlacesProvider = (() => {
       if(p.servesVegetarianFood) extraTags.push("Hälsosamt");
       if(p.outdoorSeating) extraTags.push("Utomhus");
       return {
-        name: p.displayName?.text || "Okänt ställe",
+        name: p.displayName?.text || "Okänd restaurang",
         type: typeLabel,
         price: mapGooglePriceLevel(p.priceLevel),
         dist: haversineKm(criteria.coords, { lat: p.location.latitude, lng: p.location.longitude }),
@@ -705,7 +706,12 @@ const PlacesProvider = (() => {
         // Flaggar snabbmatskedjor för scorePlace() istället för att
         // plocka bort dem helt — de ska kunna dyka upp ibland, bara inte
         // ofta eller högt rankade (se isQuickServiceChain nedan).
-        isChain: isQuickServiceChain(p)
+        isChain: isQuickServiceChain(p),
+        // Råa booleaner (utöver taggarna ovan) så kostfiltret och
+        // väderanpassningen kan filtrera/vikta exakt, istället för att
+        // behöva tolka fritext-taggar.
+        servesVegetarianFood: !!p.servesVegetarianFood,
+        outdoorSeating: !!p.outdoorSeating
       };
     });
   }
@@ -782,7 +788,7 @@ const PlacesProvider = (() => {
     if(atmosphere.servesAlcohol) bits.push("servering av alkohol");
     if(atmosphere.goodForGroups) bits.push("bra för grupper");
 
-    const typePhrase = typeLabel ? typeLabel.toLowerCase() : "ett ställe";
+    const typePhrase = typeLabel ? typeLabel.toLowerCase() : "en restaurang";
     const ratingClause = typeof p.rating === "number"
       ? (p.userRatingCount
           ? `${p.rating.toFixed(1)} i betyg på Google (${p.userRatingCount} recensioner)`
@@ -1363,7 +1369,7 @@ function renderAccount(){
     <div class="account-stats">
       <div class="account-stat">
         <div class="account-stat-num">${favorites.length}</div>
-        <div class="account-stat-label">${favorites.length === 1 ? 'sparat ställe' : 'sparade ställen'}</div>
+        <div class="account-stat-label">${favorites.length === 1 ? 'sparad restaurang' : 'sparade restauranger'}</div>
       </div>
       ${favTag ? `
       <div class="account-stat">
@@ -1378,7 +1384,7 @@ function renderAccount(){
       ${excluded.length ? `
       <div class="account-stat">
         <div class="account-stat-num">${excluded.length}</div>
-        <div class="account-stat-label">${excluded.length === 1 ? 'uteslutet ställe' : 'uteslutna ställen'}</div>
+        <div class="account-stat-label">${excluded.length === 1 ? 'utesluten restaurang' : 'uteslutna restauranger'}</div>
       </div>` : ''}
     </div>
 
@@ -1388,8 +1394,8 @@ function renderAccount(){
     </p>` : ''}
 
     <div class="account-actions">
-      <button class="btn btn-primary" id="viewFavsBtn">Visa sparade ställen</button>
-      <button class="btn btn-ghost" id="viewExcludedBtn">Hantera uteslutna ställen${excluded.length ? ` (${excluded.length})` : ''}</button>
+      <button class="btn btn-primary" id="viewFavsBtn">Visa sparade restauranger</button>
+      <button class="btn btn-ghost" id="viewExcludedBtn">Hantera uteslutna restauranger${excluded.length ? ` (${excluded.length})` : ''}</button>
       <button class="btn btn-ghost" id="exportDataBtn">Exportera mina data</button>
       <button class="btn btn-ghost" id="resetPrefsBtn">Återställ standardval</button>
       <button class="btn btn-ghost" id="signOutBtn" style="color: var(--danger);">Logga ut</button>
@@ -1434,13 +1440,13 @@ function renderFavorites(){
   if(favorites.length === 0){
     el.card.innerHTML = `
       <div class="eyebrow">Favoriter</div>
-      <h1>Inga sparade <em>ställen än</em></h1>
+      <h1>Inga sparade <em>restauranger än</em></h1>
       <p class="fav-empty">Tryck på hjärtat på ett förslag för att spara det här.</p>
     `;
   } else {
     el.card.innerHTML = `
       <div class="eyebrow">Favoriter</div>
-      <h1>Era <em>${favorites.length === 1 ? 'sparade ställe' : 'sparade ställen'}</em></h1>
+      <h1>Era <em>${favorites.length === 1 ? 'sparade restaurang' : 'sparade restauranger'}</em></h1>
     `;
     const frag = document.createDocumentFragment();
     favorites.forEach(f => {
@@ -1496,14 +1502,14 @@ function renderExcluded(){
 
   if(excluded.length === 0){
     el.card.innerHTML = `
-      <div class="eyebrow">Uteslutna ställen</div>
+      <div class="eyebrow">Uteslutna restauranger</div>
       <h1>Inga <em>uteslutna än</em></h1>
       <p class="fav-empty">Tryck på "Inte för mig" på ett förslag för att aldrig se det igen.</p>
     `;
   } else {
     el.card.innerHTML = `
-      <div class="eyebrow">Uteslutna ställen</div>
-      <h1>${excluded.length === 1 ? 'Ett' : excluded.length} <em>${excluded.length === 1 ? 'uteslutet ställe' : 'uteslutna ställen'}</em></h1>
+      <div class="eyebrow">Uteslutna restauranger</div>
+      <h1>${excluded.length === 1 ? 'Ett' : excluded.length} <em>${excluded.length === 1 ? 'utesluten restaurang' : 'uteslutna restauranger'}</em></h1>
       <p class="lead">De här föreslås aldrig längre. Tryck "Ta tillbaka" om något hamnat här av misstag.</p>
     `;
     const frag = document.createDocumentFragment();
@@ -1560,7 +1566,7 @@ const LEGAL_CONTENT = {
       <h3>Inga garantier</h3>
       <p>Uppgifter om öppettider, priser, tillgänglighet och liknande hämtas från tredje part och kan ha hunnit ändras. Kontrollera alltid direkt med stället innan du bokar eller besöker det. matchymatchy garanterar inte att förslagen är korrekta, kompletta eller uppdaterade.</p>
       <h3>Ansvarsbegränsning</h3>
-      <p>Tjänsten tillhandahålls i befintligt skick. I den utsträckning svensk lag tillåter ansvarar matchymatchy inte för skador, kostnader eller besvikelser som uppstår till följd av att du använder tjänsten eller besöker ett föreslaget ställe.</p>
+      <p>Tjänsten tillhandahålls i befintligt skick. I den utsträckning svensk lag tillåter ansvarar matchymatchy inte för skador, kostnader eller besvikelser som uppstår till följd av att du använder tjänsten eller besöker en föreslagen restaurang.</p>
       <h3>Immateriella rättigheter</h3>
       <p>Design, text och funktionalitet på matchymatchy tillhör matchymatchy. Platsinformation (namn, betyg, typ m.m.) tillhör respektive källa, i första hand Google.</p>
       <h3>Ändringar</h3>
@@ -1577,7 +1583,7 @@ const LEGAL_CONTENT = {
       <p>[Ditt namn eller företagsnamn] ansvarar för matchymatchy och behandlingen som beskrivs här. Kontakta oss via [e-postadress] vid frågor.</p>
       <h3>Detta samlar vi in — och detta gör vi inte</h3>
       <ul>
-        <li><strong>Din plats:</strong> endast om du aktivt väljer att dela den (via webbläsarens platsbehörighet eller genom att skriva in en adress). Koordinaterna skickas till Google för att hitta ställen nära dig, men lagras aldrig av oss — matchymatchy har ingen egen server som sparar besökardata.</li>
+        <li><strong>Din plats:</strong> endast om du aktivt väljer att dela den (via webbläsarens platsbehörighet eller genom att skriva in en adress). Koordinaterna skickas till Google för att hitta restauranger nära dig, men lagras aldrig av oss — matchymatchy har ingen egen server som sparar besökardata.</li>
         <li><strong>Favoriter:</strong> sparas lokalt i din egen webbläsare (så kallad local storage) om du trycker på hjärtat på ett förslag. De skickas aldrig till oss och försvinner om du rensar webbläsarens data.</li>
         <li><strong>Inga konton, ingen spårning:</strong> vi samlar inte in namn, e-post eller liknande, och använder inga cookies för reklam eller spårning.</li>
       </ul>
@@ -1599,7 +1605,7 @@ const LEGAL_CONTENT = {
       <p>matchymatchy sätter inga cookies för spårning, analys eller reklam. Det enda som sparas i din webbläsare är sådant som gör tjänsten användbar för dig.</p>
       <h3>Det vi faktiskt sparar lokalt</h3>
       <ul>
-        <li><strong>Favoriter</strong> (local storage) — dina sparade ställen, så de finns kvar nästa gång du öppnar matchymatchy.</li>
+        <li><strong>Favoriter</strong> (local storage) — dina sparade restauranger, så de finns kvar nästa gång du öppnar matchymatchy.</li>
         <li><strong>Att du sett den här rutan</strong> (local storage) — så vi inte visar samtyckesbannern varje gång.</li>
       </ul>
       <p>Ingen av dessa uppgifter skickas till oss eller till tredje part — de ligger enbart i din egen webbläsare tills du raderar dem.</p>
@@ -1733,14 +1739,14 @@ const HOME_MODE_INFO = {
   tonight:     { emoji:"🌙", desc:"Samma quiz, men resultatet blir en hel kväll: förfest, middag och efterfest." },
   spontaneous: { emoji:"🎲", desc:"Inga frågor. Ett tryck, så väljer vi åt er." },
   group:       { emoji:"👯", desc:"Lägg till hela gänget så väger vi ihop allas smak till en matchning alla gillar." },
-  date:        { emoji:"💕", desc:"Samma quiz, men vi viktar upp mysiga och romantiska ställen — perfekt för två." }
+  date:        { emoji:"💕", desc:"Samma quiz, men vi viktar upp mysiga och romantiska restauranger — perfekt för två." }
 };
 
 function renderHome(){
   el.card.style.minHeight = '380px';
   el.card.innerHTML = `
-    <h1>Hitta något att göra <em>på sekunder</em></h1>
-    <p class="lead">matchymatchy scannar det som finns nära er och föreslår tre ställen som faktiskt passar — inga oändliga listor att skrolla igenom.</p>
+    <h1>Hitta rätt restaurang <em>på sekunder</em></h1>
+    <p class="lead">matchymatchy scannar det som finns nära er och föreslår tre restauranger som faktiskt passar — inga oändliga listor att skrolla igenom.</p>
     <button class="btn btn-primary" id="startNowBtn">Kom igång</button>
     <div class="field-label" style="margin-top:22px;">Eller välj ett läge direkt</div>
     <div class="mode-cards" id="homeModeCards">
@@ -1813,7 +1819,7 @@ function renderLocation(){
   el.card.innerHTML = `
     <div class="eyebrow">Steg 1 · Plats</div>
     <h1>Var är ni <em>just nu?</em></h1>
-    <p class="lead">Vi behöver din plats för att kunna scanna omgivningen och matcha er med rätt ställen inom rimligt avstånd.</p>
+    <p class="lead">Vi behöver din plats för att kunna scanna omgivningen och matcha er med rätt restauranger inom rimligt avstånd.</p>
     <div class="pin-wrap">
       <div class="pin">
         <div class="pulse"></div>
@@ -1854,7 +1860,7 @@ function requestLocation(){
   status.textContent = "Söker din plats…";
   if(!navigator.geolocation){
     status.classList.add('err');
-    status.textContent = "Din enhet stödjer inte platsdelning — skriv in en adress eller ett ställe nedan istället.";
+    status.textContent = "Din enhet stödjer inte platsdelning — skriv in en adress eller en plats nedan istället.";
     return;
   }
   navigator.geolocation.getCurrentPosition(
@@ -1869,7 +1875,7 @@ function requestLocation(){
       // tyst föll tillbaka på exempeldata med hittepå-avstånd som såg ut
       // som riktiga. Be istället om en adress, så avstånden alltid stämmer.
       status.classList.add('err');
-      status.textContent = "Ingen åtkomst till din plats — skriv in en adress eller ett ställe nedan istället.";
+      status.textContent = "Ingen åtkomst till din plats — skriv in en adress eller en plats nedan istället.";
       // Kod 1 (nekad) eller 2 (otillgänglig) betyder oftast att platstjänster
       // är helt avstängt på systemnivå — då hjälper det inte att bara fråga
       // igen, så vi visar konkreta steg för just den här enheten istället.
@@ -1986,7 +1992,7 @@ async function searchManualLocation(query, statusEl, resultsEl){
       statusEl.textContent = "Hittade inget som matchar — testa ett annat namn, eller lägg till stad.";
       return;
     }
-    statusEl.textContent = matches.length === 1 ? "1 träff — bekräfta genom att välja den" : `${matches.length} träffar — välj rätt ställe`;
+    statusEl.textContent = matches.length === 1 ? "1 träff — bekräfta genom att välja den" : `${matches.length} träffar — välj rätt plats`;
     resultsEl.innerHTML = matches.map((m, i) => `
       <div class="choice" tabindex="0" role="button" data-i="${i}">
         <span>${m.name}</span><span class="tag">${m.address}</span>
@@ -2107,8 +2113,8 @@ function budgetValueLabel(amount){
 }
 
 function budgetNote(amount){
-  if(isOpenEndedLow(amount)) return "Visar bara ställen under 50 kr";
-  if(isOpenEndedHigh(amount)) return "Visar bara ställen över 700 kr";
+  if(isOpenEndedLow(amount)) return "Visar bara restauranger under 50 kr";
+  if(isOpenEndedHigh(amount)) return "Visar bara restauranger över 700 kr";
   const labels = { 1:"€ · Prisvärt, under 150 kr", 2:"€€ · Vardagslyx, 150–350 kr", 3:"€€€ · Lite finare, 350–700 kr", 4:"€€€€ · Vi unnar oss, över 700 kr" };
   return labels[amountToTier(amount)];
 }
@@ -2117,7 +2123,7 @@ function renderBudget(){
   el.card.innerHTML = `
     <div class="eyebrow">Steg 2 · Budget</div>
     <h1>Vad är er <em>budget</em>?</h1>
-    <p class="lead">Dra i reglaget för ungefär hur mycket ni vill lägga per person. Dra hela vägen till en kant för att bara se ställen under 50 kr eller över 1000 kr.</p>
+    <p class="lead">Dra i reglaget för ungefär hur mycket ni vill lägga per person. Dra hela vägen till en kant för att bara se restauranger under 50 kr eller över 1000 kr.</p>
     <input type="range" min="${BUDGET_MIN}" max="${BUDGET_MAX}" step="10" value="${state.budgetAmount}" id="budgetRange" aria-label="Budget per person i kronor">
     <div class="range-val"><span>Under 50</span><b id="budgetVal">${budgetValueLabel(state.budgetAmount)}</b><span>Över 1000</span></div>
     <p class="loc-status" id="budgetTier">${budgetNote(state.budgetAmount)}</p>
@@ -2161,7 +2167,7 @@ function renderRadius(){
   el.card.innerHTML = `
     <div class="eyebrow">Steg 3 · Sträcka</div>
     <h1>Hur långt kan ni <em>tänkas gå?</em></h1>
-    <p class="lead">Dra i reglaget för hur stort område vi ska scanna av. Öppna ställen visas alltid före stängda.</p>
+    <p class="lead">Dra i reglaget för hur stort område vi ska scanna av. Öppna restauranger visas alltid före stängda.</p>
     <input type="range" min="${RADIUS_MIN}" max="${RADIUS_MAX}" step="0.5" value="${state.radius}" id="radiusRange" aria-label="Sökradie i kilometer">
     <div class="range-val"><span>0,5 km</span><b id="radiusVal">${radiusValueLabel(state.radius)}</b><span>50 km</span></div>
     <div class="spacer"></div>
@@ -2272,7 +2278,7 @@ function analyzeVibeText(text){
 }
 
 function renderVibe(){
-  const buttonLabel = state.mode === 'tonight' ? "Planera kvällen" : (state.mode === 'date' ? "Hitta dejtställen" : "Hitta matchningar");
+  const buttonLabel = state.mode === 'tonight' ? "Planera kvällen" : (state.mode === 'date' ? "Hitta dejtrestauranger" : "Hitta matchningar");
   const savedText = state.customVibeText ? state.customVibeText.replace(/"/g, '&quot;') : '';
 
   el.card.innerHTML = `
@@ -2288,7 +2294,7 @@ function renderVibe(){
     <div class="loc-or">eller skriv er egen</div>
     <div class="loc-search-row">
       <input type="text" class="text-input" id="vibeInput" placeholder='T.ex. "chill utan stress" eller "mat och bar"' value="${savedText}">
-      <button class="btn btn-search" id="vibeAnalyzeBtn" type="button">Hitta matchningar</button>
+      <button class="btn btn-search" id="vibeAnalyzeBtn" type="button" ${savedText ? '' : 'disabled'}>Hitta matchningar</button>
     </div>
     <p class="loc-status" id="vibeStatus">${state.vibeSource==='custom' ? vibeCustomStatusText(state.customVibeText, state.vibeTags) : ''}</p>
     <div class="spacer"></div>
@@ -2299,6 +2305,7 @@ function renderVibe(){
   const input = document.getElementById('vibeInput');
   const statusEl = document.getElementById('vibeStatus');
   const nextBtn = document.getElementById('nextBtn');
+  const analyzeBtn = document.getElementById('vibeAnalyzeBtn');
 
   function selectPreset(target){
     list.querySelectorAll('.choice').forEach(c => c.classList.remove('selected'));
@@ -2311,6 +2318,7 @@ function renderVibe(){
     state.adventure = preset.adventure;
     state.customVibeText = '';
     input.value = '';
+    analyzeBtn.disabled = true;
     statusEl.classList.remove('err');
     statusEl.textContent = '';
     nextBtn.disabled = false;
@@ -2323,6 +2331,13 @@ function renderVibe(){
     }
   });
 
+  // Knappen är bara klickbar när det faktiskt finns text att analysera —
+  // annars gick det tidigare att trycka på den utan att något hände, vilket
+  // bara var förvirrande.
+  input.addEventListener('input', () => {
+    analyzeBtn.disabled = !input.value.trim();
+  });
+
   // Tolkar fritexten och går direkt vidare till matchningen — man ska inte
   // behöva klicka en gång till på knappen längre ner. Analysen blockerar
   // aldrig: hittas inga kända nyckelord (t.ex. helt fritt formulerad text)
@@ -2331,7 +2346,7 @@ function renderVibe(){
   // ge upp.
   function runAnalysisAndSearch(){
     const text = input.value.trim();
-    if(!text){ input.focus(); return; }
+    if(!text) return;
     const analysis = analyzeVibeText(text);
     state.vibeSource = 'custom';
     state.vibeId = null;
@@ -2343,8 +2358,8 @@ function renderVibe(){
     render();
   }
 
-  document.getElementById('vibeAnalyzeBtn').addEventListener('click', runAnalysisAndSearch);
-  input.addEventListener('keydown', (e) => { if(e.key === 'Enter'){ e.preventDefault(); runAnalysisAndSearch(); } });
+  analyzeBtn.addEventListener('click', runAnalysisAndSearch);
+  input.addEventListener('keydown', (e) => { if(e.key === 'Enter' && !analyzeBtn.disabled){ e.preventDefault(); runAnalysisAndSearch(); } });
   nextBtn.addEventListener('click', () => { state.step++; render(); });
 }
 
@@ -2428,7 +2443,7 @@ function renderResults(matches){
     now: "Baserat på budget, avstånd och er vibe — här är vad matchymatchy hittade åt er.",
     spontaneous: "Vi slumpade fram budget, sträcka och stämning å era vägnar — här är vad vi hittade.",
     group: `Vi vägde ihop smaken hos ${state.groupSize || 1} ${state.groupSize === 1 ? 'person' : 'personer'} och hittade det här.`,
-    date: "Vi viktade upp mysiga, romantiska ställen — här är vad som passade bäst för er två."
+    date: "Vi viktade upp mysiga, romantiska restauranger — här är vad som passade bäst för er två."
   };
 
   el.card.innerHTML = `
@@ -2520,7 +2535,7 @@ function renderSpontaneousIntro(){
   el.card.innerHTML = `
     <div class="eyebrow">Spontant</div>
     <h1>Inga frågor. <em>Bara ett förslag.</em></h1>
-    <p class="lead">Vi slumpar fram budget, sträcka och stämning åt er och hittar tre ställen direkt — inget quiz.</p>
+    <p class="lead">Vi slumpar fram budget, sträcka och stämning åt er och hittar tre restauranger direkt — inget quiz.</p>
     <div class="spacer"></div>
     <button class="btn btn-primary" id="surpriseBtn">Överraska oss</button>
   `;
@@ -2680,7 +2695,7 @@ function renderEveningPlan(plan){
   el.card.innerHTML = `
     <div class="eyebrow">Klart</div>
     <h1>Er <em>kväll</em>, planerad</h1>
-    <p class="lead">Från förfest till efterfest — tre ställen som passar er stämning och budget ikväll.</p>
+    <p class="lead">Från förfest till efterfest — tre restauranger som passar er stämning och budget ikväll.</p>
     <div class="timeline" id="timelineWrap"></div>
   `;
   const wrap = document.getElementById('timelineWrap');
