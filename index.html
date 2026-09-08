@@ -903,16 +903,10 @@ function tagBonus(p, tagList){
 // plats i bakgrunden, utan en egen skärm, med kort timeout så flödet
 // aldrig känns långsammare än innan.
 function quickLocation(timeoutMs = 9000){
-  const cached = getCachedLocation();
-  if(cached) return Promise.resolve({ lat: cached.lat, lng: cached.lng });
   return new Promise(resolve => {
     if(!navigator.geolocation){ resolve(null); return; }
     navigator.geolocation.getCurrentPosition(
-      pos => {
-        const coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-        cacheLocation(coords);
-        resolve(coords);
-      },
+      pos => resolve({ lat: pos.coords.latitude, lng: pos.coords.longitude }),
       () => resolve(null),
       { timeout: timeoutMs, maximumAge: 5 * 60 * 1000 }
     );
@@ -920,29 +914,57 @@ function quickLocation(timeoutMs = 9000){
 }
 
 /* =========================================================================
-   PLATSCACHE
-   Sparar senaste kända position i webbläsaren en stund, så man inte
-   behöver be om en ny GPS-fix varje gång man startar ett nytt quiz eller
-   byter läge — bara när det faktiskt gått ett tag eller platsen kan ha
-   ändrats (t.ex. om man rest vidare).
+   SENASTE SÖKNINGAR
+   Sparar de platser man själv skrivit in och valt (inte GPS-platsen) som
+   snabbval nästa gång man ska skriva in en plats — sparar både en sökning
+   OCH ett Places-anrop om man återanvänder en av dem, till skillnad från
+   att bara skriva samma sak igen.
    ========================================================================= */
-const LOCATION_CACHE_KEY = 'matchymatchy_last_location';
-const LOCATION_CACHE_MAX_AGE = 20 * 60 * 1000; // 20 minuter
+const RECENT_SEARCHES_KEY = 'matchymatchy_recent_searches';
+const RECENT_SEARCHES_MAX = 5;
 
-function getCachedLocation(){
-  try{
-    const raw = JSON.parse(localStorage.getItem(LOCATION_CACHE_KEY));
-    if(raw && typeof raw.lat === 'number' && (Date.now() - raw.timestamp) < LOCATION_CACHE_MAX_AGE){
-      return raw;
-    }
-  }catch(e){}
-  return null;
+function getRecentSearches(){
+  try{ return JSON.parse(localStorage.getItem(RECENT_SEARCHES_KEY)) || []; }
+  catch(e){ return []; }
 }
-function cacheLocation(coords){
-  try{ localStorage.setItem(LOCATION_CACHE_KEY, JSON.stringify({ ...coords, timestamp: Date.now() })); }catch(e){}
+function saveRecentSearch(place){
+  let list = getRecentSearches().filter(p => !(p.name === place.name && p.address === place.address));
+  list.unshift(place);
+  list = list.slice(0, RECENT_SEARCHES_MAX);
+  try{ localStorage.setItem(RECENT_SEARCHES_KEY, JSON.stringify(list)); }catch(e){}
 }
-function minutesAgo(timestamp){
-  return Math.max(0, Math.round((Date.now() - timestamp) / 60000));
+function recentSearchesHtml(){
+  const list = getRecentSearches();
+  if(!list.length) return '';
+  return `
+    <div class="field-label" style="margin-top:18px;">Senaste sökningar</div>
+    <div class="choices" id="recentSearchList">
+      ${list.map((p, i) => `
+        <div class="choice" tabindex="0" role="button" data-i="${i}">
+          <span>${p.name}</span><span class="tag">${p.address}</span>
+        </div>
+      `).join('')}
+    </div>
+  `;
+}
+function wireRecentSearches(){
+  const wrap = document.getElementById('recentSearchList');
+  if(!wrap) return;
+  const list = getRecentSearches();
+  function pick(target){
+    const p = list[parseInt(target.dataset.i, 10)];
+    if(!p) return;
+    state.coords = { lat: p.lat, lng: p.lng };
+    saveRecentSearch(p); // flytta upp den till toppen av listan igen
+    state.step++;
+    render();
+  }
+  wrap.querySelectorAll('.choice').forEach(el => {
+    el.addEventListener('click', () => pick(el));
+    el.addEventListener('keydown', (e) => {
+      if(e.key === 'Enter' || e.key === ' '){ e.preventDefault(); pick(el); }
+    });
+  });
 }
 
 // Litet stjärnbetyg i matchymatchys egen stil (inte kopplat till någon
@@ -1848,7 +1870,6 @@ function render(){
 }
 
 function renderLocation(){
-  const cached = getCachedLocation();
   el.card.innerHTML = `
     <div class="eyebrow">Steg 1 · Plats</div>
     <h1>Var är ni <em>just nu?</em></h1>
@@ -1859,13 +1880,8 @@ function renderLocation(){
         <svg viewBox="0 0 24 24" fill="none"><path d="M12 21s7-6.2 7-11.2A7 7 0 0 0 5 9.8C5 14.8 12 21 12 21z" stroke="#ffc857" stroke-width="1.6"/><circle cx="12" cy="9.5" r="2.4" stroke="#ffc857" stroke-width="1.6"/></svg>
       </div>
     </div>
-    <p class="loc-status" id="locStatus">${cached ? `Vi har er plats för ${minutesAgo(cached.timestamp)} min sedan` : 'Tryck för att dela din plats'}</p>
-    ${cached ? `
-      <button class="btn btn-primary" id="useCachedLocBtn">Använd senaste platsen</button>
-      <button class="btn btn-ghost" id="locBtn">Uppdatera plats</button>
-    ` : `
-      <button class="btn btn-primary" id="locBtn">Dela plats</button>
-    `}
+    <p class="loc-status" id="locStatus">Tryck för att dela din plats</p>
+    <button class="btn btn-primary" id="locBtn">Dela plats</button>
     <div class="loc-or">eller</div>
     <div class="loc-search-row">
       <input type="text" class="text-input" id="manualLocInput" placeholder="T.ex. hotellet du bor på, en adress eller en stad" aria-label="Skriv in en plats">
@@ -1873,15 +1889,10 @@ function renderLocation(){
     </div>
     <p class="loc-status" id="manualLocStatus"></p>
     <div class="choices" id="manualLocResults"></div>
+    ${recentSearchesHtml()}
   `;
   document.getElementById('locBtn').addEventListener('click', requestLocation);
-  if(cached){
-    document.getElementById('useCachedLocBtn').addEventListener('click', () => {
-      state.coords = { lat: cached.lat, lng: cached.lng };
-      state.step++;
-      render();
-    });
-  }
+  wireRecentSearches();
 
   const input = document.getElementById('manualLocInput');
   const status = document.getElementById('manualLocStatus');
@@ -1911,7 +1922,6 @@ function requestLocation(){
   navigator.geolocation.getCurrentPosition(
     (pos) => {
       state.coords = { lat: pos.coords.latitude, lng: pos.coords.longitude };
-      cacheLocation(state.coords);
       status.textContent = "Plats hittad ✓";
       setTimeout(() => { state.step++; render(); }, 500);
     },
@@ -2047,7 +2057,7 @@ async function searchManualLocation(query, statusEl, resultsEl){
     function pick(target){
       const m = matches[parseInt(target.dataset.i, 10)];
       state.coords = { lat: m.lat, lng: m.lng };
-      cacheLocation(state.coords);
+      saveRecentSearch({ name: m.name, address: m.address, lat: m.lat, lng: m.lng });
       statusEl.classList.remove('err');
       statusEl.textContent = `Vald plats: ${m.name} ✓`;
       resultsEl.innerHTML = '';
@@ -2339,7 +2349,7 @@ function renderVibe(){
     </div>
     <div class="loc-or">eller skriv er egen</div>
     <div class="loc-search-row">
-      <input type="text" class="text-input" id="vibeInput" placeholder="T.ex. nåt med uteservering, gärna i solen" value="${savedText}">
+      <input type="text" class="text-input" id="vibeInput" placeholder="T.ex. Uteservering" value="${savedText}">
       <button class="btn btn-search" id="vibeAnalyzeBtn" type="button" ${savedText ? '' : 'disabled'}>Hitta matchningar</button>
     </div>
     <p class="loc-status" id="vibeStatus">${state.vibeSource==='custom' ? vibeCustomStatusText(state.customVibeText, state.vibeTags) : ''}</p>
