@@ -677,6 +677,7 @@ const PlacesProvider = (() => {
       if(servesAlcohol) extraTags.push("Alkohol");
       if(p.servesVegetarianFood) extraTags.push("Hälsosamt");
       if(p.outdoorSeating) extraTags.push("Utomhus");
+      if(p.goodForGroups) extraTags.push("Socialt");
       return {
         name: p.displayName?.text || "Okänd restaurang",
         type: typeLabel,
@@ -863,18 +864,54 @@ const PlacesProvider = (() => {
    Ren funktion: tar platser + kvizsvar, returnerar rankade matchningar.
    Oberoende av var platserna kom ifrån (mock eller live).
    ========================================================================= */
+// VARFÖR SAMMA STÄLLEN OFTA TOPPADE LISTAN TIDIGARE (och varför det är
+// åtgärdat här): tre saker samverkade.
+//   1. "adv" (äventyrsnivå) sattes till en HÅRDKODAD konstant (3) för all
+//      riktig Google-data, se fetchLive() — den termen var alltså inert
+//      för live-sökningar och gjorde ingen faktisk skillnad, bara plats i
+//      formeln. ("matchar hur äventyrliga ni är"-texten var av samma skäl
+//      mest en slump-sanning, inte en riktig personalisering — borttagen
+//      från reasonFor(), se vibeDescriptor() ovan istället.)
+//   2. Betyg/antal recensioner hämtades från Google och visades i UI:t,
+//      men påverkade ALDRIG rankingen — två annars likvärdiga ställen
+//      (samma pris, samma avstånd) rankades då godtyckligt (i praktiken:
+//      i den ordning Google råkade returnera dem), inte efter vilket som
+//      faktiskt var bättre.
+//   3. Matchningen var 100% deterministisk — samma svar gav alltid EXAKT
+//      samma ordning, varje gång, för alltid. Ingen variation, inget sätt
+//      för systemet att lära sig vad just DU gillar över tid.
+// Åtgärdat nedan med tre tillägg: en riktig kvalitetssignal (rating), en
+// lärande personaliseringssignal (favoriteAffinityScore, byggd på vilka
+// taggar man faktiskt sparat som favorit), och ett litet slumpmässigt
+// jitter så att jämnstarka alternativ roterar mellan besök istället för
+// att samma vinnare upprepas i evighet. isChain-avdraget och den hårda
+// öppet/stängt-prioriteringen (compareByOpenThenScore) är oförändrade.
 function scorePlace(p, state){
   const priceScore = 1 - (Math.abs(p.price - state.budget) / 3);
   const distScore = p.dist <= state.radius ? 1 : Math.max(0, 1 - ((p.dist - state.radius) / 2));
   const advScore = 1 - (Math.abs(p.adv - state.adventure) / 4);
-  let score = priceScore*0.4 + distScore*0.35 + advScore*0.25;
+  const ratingScore = typeof p.rating === "number" ? Math.max(0, Math.min(1, (p.rating - 3) / 2)) : 0.5;
+  const affinityScore = favoriteAffinityScore(p, getFavoriteTagWeights());
+
+  let score =
+    priceScore    * 0.34 +
+    distScore     * 0.28 +
+    advScore      * 0.10 +
+    ratingScore   * 0.14 +
+    affinityScore * 0.14;
+
+  // ±3% slump — aldrig tillräckligt för att knuffa ett klart sämre ställe
+  // före ett klart bättre, men tillräckligt för att jämnstarka alternativ
+  // ska kunna byta plats mellan olika besök/sökningar.
+  score += (Math.random() - 0.5) * 0.06;
+
   // Snabbmatskedjor (Max, McDonald's, KFC m.fl.) blockeras inte längre
   // helt — de kan fortfarande dyka upp om inget bättre finns i närheten —
   // men får ett rejält poängavdrag så de sällan konkurrerar på lika
   // villkor med "riktiga" restauranger/barer/caféer och nästan aldrig
   // hamnar högst upp om det finns bättre alternativ.
   if(p.isChain) score *= 0.45;
-  return score;
+  return Math.max(0, score);
 }
 
 // Öppna ställen (openNow===true ELLER null/okänt) ska ALLTID rankas före
@@ -1055,15 +1092,58 @@ function mapsUrlFor(p){
   return `https://www.google.com/maps/search/?api=1&query=${encodeURIComponent([p.name, p.type].filter(Boolean).join(" "))}`;
 }
 
+// Beskriver ställets FAKTISKA känsla utifrån dess egna taggar. Ersätter
+// den gamla jämförelsen mot en "äventyrsnivå" — den var i praktiken
+// meningslös för riktig Google-data (se adv:3-kommentaren i scorePlace)
+// och sa därför inte något sant om just det här stället, bara en
+// slumpmässig sanning eftersom skalan nästan alltid råkade träffa.
+function vibeDescriptor(p){
+  const tags = p.tags || [];
+  const has = (...list) => list.some(t => tags.includes(t));
+  if(has("Lugnt", "Mysigt", "Avslappnat")) return "har en lugn, avslappnad känsla";
+  if(has("Livlig stämning", "Socialt", "Högt i tak")) return "har en livlig stämning";
+  if(has("Romantiskt", "Datevänligt")) return "har en romantisk känsla";
+  if(has("Äventyrligt", "Hemlig entré")) return "sticker ut lite extra";
+  if(has("Utsikt", "Havsnära")) return "har ett fint läge";
+  if(typeof p.rating === "number" && p.rating >= 4.5) return "är ovanligt omtyckt (högt betyg)";
+  return "verkar vara ett bra val";
+}
+
+// Bygger en enkel smakprofil utifrån VILKA TAGGAR man faktiskt sparat som
+// favorit tidigare (t.ex. "Mysigt" x3, "Utsikt" x1). Det här är den enda
+// riktiga, lärande personaliseringssignalen i appen: allt annat i
+// scorePlace (pris, avstånd, öppettider) värderas likadant för alla — den
+// här vikten byggs upp av vad just DU faktiskt gillat och blir starkare
+// ju mer du använder appen.
+function getFavoriteTagWeights(){
+  const weights = {};
+  getFavorites().forEach(f => (f.tags || []).forEach(t => { weights[t] = (weights[t] || 0) + 1; }));
+  return weights;
+}
+
+// 0–1: hur väl ett ställes taggar matchar smakprofilen ovan. Normaliserad
+// mot den mest sparade taggen så att någon med tio "Mysigt"-favoriter inte
+// får en orimligt dominant, självförstärkande vikt.
+function favoriteAffinityScore(p, weights){
+  const keys = Object.keys(weights);
+  if(!keys.length) return 0;
+  const max = Math.max(...keys.map(k => weights[k]));
+  const hits = (p.tags || []).reduce((sum, t) => sum + (weights[t] || 0), 0);
+  return Math.min(1, hits / (max * 2));
+}
+
 function reasonFor(p, state){
   const parts = [];
   parts.push(Math.abs(p.price-state.budget)===0 ? "träffar er budget rakt av" : "ligger nära er budget");
   parts.push(p.dist<=state.radius ? `bara ${p.dist.toFixed(1)} km bort` : `${p.dist.toFixed(1)} km bort, strax utanför er radie`);
-  parts.push(Math.abs(p.adv-state.adventure)<=1 ? "matchar hur äventyrliga ni är" : "sticker lite ut från er profil");
+  parts.push(vibeDescriptor(p));
   const traitPart = p.trait ? (p.traitStandalone ? ` ${p.trait}` : ` Känt för ${p.trait}.`) : "";
   const vibeHits = state.vibeTags && state.vibeTags.length ? p.tags.filter(t => state.vibeTags.includes(t)) : [];
   const vibePart = vibeHits.length ? ` Matchar er vibe (${vibeHits.join(", ")}).` : "";
-  return `${parts[0].charAt(0).toUpperCase()+parts[0].slice(1)}, ${parts[1]} och ${parts[2]}.${traitPart}${vibePart}`;
+  const favWeights = getFavoriteTagWeights();
+  const favHits = Object.keys(favWeights).length ? p.tags.filter(t => favWeights[t]) : [];
+  const favPart = favHits.length ? ` Liknar ställen ni sparat som favoriter tidigare (${favHits.slice(0,2).join(", ")}).` : "";
+  return `${parts[0].charAt(0).toUpperCase()+parts[0].slice(1)}, ${parts[1]} och ${parts[2]}.${traitPart}${vibePart}${favPart}`;
 }
 
 // Ger bonuspoäng mot förslag som matchar den vibe gänget valt (eller den
@@ -1622,7 +1702,7 @@ const LEGAL_CONTENT = {
       <h3>Ansvarsbegränsning</h3>
       <p>Tjänsten tillhandahålls i befintligt skick. I den utsträckning svensk lag tillåter ansvarar matchymatchy inte för skador, kostnader eller besvikelser som uppstår till följd av att du använder tjänsten eller besöker en föreslagen restaurang.</p>
       <h3>Immateriella rättigheter</h3>
-      <p>Design, text och funktionalitet på matchymatchy tillhör matchymatchy. Platsinformation (namn, betyg, typ m.m.) tillhör respektive källa, i första hand Google.</p>
+      <p>Design, text och funktionalitet på matchymatchy tillhör matchymatchy. Platsinformation (namn, betyg, typ m.m.) tillhör respektive källa.</p>
       <h3>Ändringar</h3>
       <p>Villkoren kan uppdateras då och då. Den senaste versionen gäller alltid och finns tillgänglig här.</p>
       <h3>Tillämplig lag</h3>
@@ -1634,7 +1714,7 @@ const LEGAL_CONTENT = {
     title: "Integritetspolicy",
     body: `
       <h3>Vem är ansvarig</h3>
-      <p>[Ditt namn eller företagsnamn] ansvarar för matchymatchy och behandlingen som beskrivs här. Kontakta oss via [e-postadress] vid frågor.</p>
+      <p>Sevela ansvarar för matchymatchy och behandlingen som beskrivs här. Kontakta oss via [e-postadress] vid frågor.</p>
       <h3>Detta samlar vi in — och detta gör vi inte</h3>
       <ul>
         <li><strong>Din plats:</strong> endast om du aktivt väljer att dela den (via webbläsarens platsbehörighet eller genom att skriva in en adress). Koordinaterna skickas till Google för att hitta restauranger nära dig, men lagras aldrig av oss — matchymatchy har ingen egen server som sparar besökardata.</li>
@@ -1676,9 +1756,9 @@ const LEGAL_CONTENT = {
     title: "Kontakt",
     body: `
       <h3>Hör av dig</h3>
-      <p>Frågor, feedback eller något som inte stämmer i ett förslag? Vi hör gärna av oss.</p>
+      <p>Frågor, feedback eller något som inte stämmer i ett förslag? Skicka gärna ett mejl.</p>
       <p>E-post: <a href="mailto:[e-postadress]">[e-postadress]</a></p>
-      <p>matchymatchy drivs av [ditt namn / företagsnamn], [ort], Sverige.</p>
+      <p>matchymatchy drivs av Sevela, [ort], Sverige.</p>
     `
   }
 };
