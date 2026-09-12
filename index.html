@@ -201,10 +201,6 @@
   }
   .hours-list-row{ font-size:12px; color: var(--muted); line-height:1.7; }
 
-  .result-card.clickable, .timeline-content.clickable{ cursor:pointer; transition: border-color .15s ease, transform .15s ease; }
-  .result-card.clickable{ border-color: rgba(255,200,87,0.35); }
-  .result-card.clickable:hover, .result-card.clickable:focus-visible{ border-color: var(--accent-2); }
-  .result-card.clickable:active{ transform: scale(0.99); }
   .maps-hint{
     display:inline-flex; align-items:center; gap:6px;
     font-size:12px; font-weight:800; color: #2a1a08;
@@ -212,12 +208,12 @@
     background: var(--accent-2);
     padding: 8px 14px;
     border-radius:100px;
+    border:none; cursor:pointer;
+    font-family:'Plus Jakarta Sans', sans-serif;
     transition: transform .15s ease, filter .15s ease;
   }
-  .result-card.clickable:hover .maps-hint, .result-card.clickable:focus-visible .maps-hint,
-  .timeline-content.clickable:hover .maps-hint, .timeline-content.clickable:focus-visible .maps-hint{
-    filter: brightness(1.08); transform: translateX(2px);
-  }
+  .maps-hint:hover, .maps-hint:focus-visible{ filter: brightness(1.08); transform: translateX(2px); }
+  .maps-hint:active{ transform: scale(0.97); }
 
   .loading-wrap{ display:flex; flex-direction:column; align-items:center; justify-content:center; flex:1; gap:18px; }
   .scan{ width:70px;height:70px; border-radius:50%; border:3px solid var(--line); border-top-color: var(--accent); animation: spin 0.9s linear infinite; }
@@ -1573,16 +1569,7 @@ async function computeMatches(state){
   });
 
   const userProfile = buildUserProfile(state);
-  let candidates = applyHardFilters(places, userProfile);
-
-  // Vid reglagets ändlägen filtrerar vi strikt på prisnivå istället för att
-  // bara vikta den i poängen — annars skulle "över 2000 kr" ändå kunna visa
-  // billiga ställen bara för att fylla ut till tre kort.
-  if(isOpenEndedLow(state.budgetAmount)){
-    candidates = candidates.filter(p => p.price === 1);
-  } else if(isOpenEndedHigh(state.budgetAmount)){
-    candidates = candidates.filter(p => p.price === 4);
-  }
+  const candidates = applyHardFilters(places, userProfile);
 
   const sorted = candidates
     .map(p => scoreCandidate(p, userProfile))
@@ -1633,7 +1620,21 @@ function savePrefs(partial){
 (function applySavedPrefs(){
   const saved = getPrefs();
   if(typeof saved.budgetAmount === 'number') state.budgetAmount = saved.budgetAmount;
-  if(typeof saved.radius === 'number') state.radius = saved.radius;
+  // Nya sparningar innehåller redan nivån (1–4) direkt (se renderBudget).
+  // Äldre sparade värden (från det borttagna kontinuerliga reglaget, 50–
+  // 1000 kr) hade bara ett kr-belopp — härled då en nivå ur samma
+  // brytpunkter (100/200/400) som de fyra nya budgetknapparna bygger på,
+  // istället för att lämna state.budget tomt eller fel.
+  if(typeof saved.budget === 'number' && saved.budget >= 1 && saved.budget <= 4){
+    state.budget = saved.budget;
+  } else if(typeof saved.budgetAmount === 'number'){
+    const a = saved.budgetAmount;
+    state.budget = a < 100 ? 1 : a < 200 ? 2 : a < 400 ? 3 : 4;
+  }
+  // RADIUS_MIN/RADIUS_MAX är inte deklarerade än här (de definieras
+  // längre ner i filen, och den här IIFE:n körs direkt vid inladdning) —
+  // literalerna nedan MÅSTE hållas i synk med RADIUS_MIN/RADIUS_MAX.
+  if(typeof saved.radius === 'number') state.radius = Math.min(20, Math.max(0.5, saved.radius));
   if(typeof saved.adventure === 'number') state.adventure = saved.adventure;
 })();
 
@@ -1767,7 +1768,17 @@ async function handleAuthChange(user){
       if(cloud.prefs){
         localStorage.setItem(PREFS_KEY, JSON.stringify(cloud.prefs));
         if(typeof cloud.prefs.budgetAmount === 'number') state.budgetAmount = cloud.prefs.budgetAmount;
-        if(typeof cloud.prefs.radius === 'number') state.radius = cloud.prefs.radius;
+        // Nya sparningar innehåller redan nivån (1–4) direkt. Äldre sparade
+        // profiler (från det borttagna kontinuerliga reglaget) hade bara
+        // ett kr-belopp — härled då en nivå ur samma brytpunkter
+        // (100/200/400) som de fyra budgetknapparna bygger på.
+        if(typeof cloud.prefs.budget === 'number' && cloud.prefs.budget >= 1 && cloud.prefs.budget <= 4){
+          state.budget = cloud.prefs.budget;
+        } else if(typeof cloud.prefs.budgetAmount === 'number'){
+          const a = cloud.prefs.budgetAmount;
+          state.budget = a < 100 ? 1 : a < 200 ? 2 : a < 400 ? 3 : 4;
+        }
+        if(typeof cloud.prefs.radius === 'number') state.radius = Math.min(20, Math.max(0.5, cloud.prefs.radius));
         if(typeof cloud.prefs.adventure === 'number') state.adventure = cloud.prefs.adventure;
       }
       if(state.showFavorites) renderFavorites();
@@ -1861,6 +1872,7 @@ function exportUserData(){
 
 function resetPrefsToDefault(){
   try{ localStorage.removeItem(PREFS_KEY); }catch(e){}
+  state.budget = null;
   state.budgetAmount = 300;
   state.radius = 3;
   syncToCloud();
@@ -2611,69 +2623,61 @@ function renderSingleChoiceStep({ eyebrow, title, lead, options, field, buttonLa
   nextBtn.addEventListener('click', () => { state.step++; render(); });
 }
 
-// Snävare, verklighetsförankrat spann (50–1000 kr istället för 100–2000 kr)
-// och brytpunkter som matchar Googles fyra prisnivåer rakt av — samma
-// indelning som mapGooglePriceLevel() använder. Det gör att det spannet
-// man drar in på faktiskt är det spannet förslagen hämtas ur, istället för
-// att reglaget bara delade in i tredjedelar oavsett vad Google kallar dyrt.
-const BUDGET_MIN = 50;
-const BUDGET_MAX = 1000;
-const BUDGET_BREAKPOINTS = [150, 350, 700]; // <150=nivå1, 150–350=nivå2, 350–700=nivå3, >700=nivå4
+// Fyra fasta budgetnivåer per person (ersätter det tidigare kontinuerliga
+// reglaget). state.budget (1–4) är EXAKT samma skala som matchnings-
+// motorn redan använder (userProfile.pricePreference/restaurantens
+// price 1–4) — bara SÄTTSÄTTET ändras här, inte skalan i sig, så
+// scoreCandidate/applyHardFilters/mapGooglePriceLevel behöver inga ändringar.
+const BUDGET_TIERS = [
+  { v:1, label:"0–100 kr",    sub:"per person" },
+  { v:2, label:"100–200 kr",  sub:"per person" },
+  { v:3, label:"200–400 kr",  sub:"per person" },
+  { v:4, label:"Över 400 kr", sub:"per person" }
+];
 
-function amountToTier(amount){
-  if(amount < BUDGET_BREAKPOINTS[0]) return 1;
-  if(amount < BUDGET_BREAKPOINTS[1]) return 2;
-  if(amount < BUDGET_BREAKPOINTS[2]) return 3;
-  return 4;
-}
-
-// Vid reglagets ändlägen är det öppna intervall ("under 50 kr" / "över
-// 1000 kr") snarare än en exakt nivå — det hanteras separat i computeMatches.
-function isOpenEndedLow(amount){ return amount <= BUDGET_MIN; }
-function isOpenEndedHigh(amount){ return amount >= BUDGET_MAX; }
-
-function budgetValueLabel(amount){
-  if(isOpenEndedLow(amount)) return "Under 50 kr";
-  if(isOpenEndedHigh(amount)) return "Över 1000 kr";
-  return amount + " kr";
-}
-
-function budgetNote(amount){
-  if(isOpenEndedLow(amount)) return "Visar bara restauranger under 50 kr";
-  if(isOpenEndedHigh(amount)) return "Visar bara restauranger över 700 kr";
-  const labels = { 1:"€ · Prisvärt, under 150 kr", 2:"€€ · Vardagslyx, 150–350 kr", 3:"€€€ · Lite finare, 350–700 kr", 4:"€€€€ · Vi unnar oss, över 700 kr" };
-  return labels[amountToTier(amount)];
-}
+// Ett representativt kr-belopp per nivå — sparas bara för visning (t.ex.
+// "Sparade standardval: ~150 kr" på kontosidan). Påverkar ALDRIG
+// matchningen, som enbart bryr sig om state.budget (1–4).
+const BUDGET_TIER_AMOUNT = { 1:50, 2:150, 3:300, 4:500 };
 
 function renderBudget(){
   el.card.innerHTML = `
     <div class="eyebrow">Steg 2 · Budget</div>
     <h1>Vad är er <em>budget</em>?</h1>
-    <p class="lead">Dra i reglaget för ungefär hur mycket ni vill lägga per person. Dra hela vägen till en kant för att bara se restauranger under 50 kr eller över 1000 kr.</p>
-    <input type="range" min="${BUDGET_MIN}" max="${BUDGET_MAX}" step="10" value="${state.budgetAmount}" id="budgetRange" aria-label="Budget per person i kronor">
-    <div class="range-val"><span>Under 50</span><b id="budgetVal">${budgetValueLabel(state.budgetAmount)}</b><span>Över 1000</span></div>
-    <p class="loc-status" id="budgetTier">${budgetNote(state.budgetAmount)}</p>
+    <p class="lead">Välj ungefär hur mycket ni vill lägga per person.</p>
+    <div class="choices" id="budgetList">
+      ${BUDGET_TIERS.map(t => `<div class="choice${state.budget===t.v?' selected':''}" tabindex="0" role="button" data-v="${t.v}"><span>${t.label}</span><span class="tag">${t.sub}</span></div>`).join('')}
+    </div>
     <div class="spacer"></div>
-    <button class="btn btn-primary" id="nextBtn">Nästa</button>
+    <button class="btn btn-primary" id="nextBtn" ${state.budget ? '' : 'disabled'}>Nästa</button>
   `;
-  const range = document.getElementById('budgetRange');
-  const valEl = document.getElementById('budgetVal');
-  const tierEl = document.getElementById('budgetTier');
-  range.addEventListener('input', () => {
-    state.budgetAmount = parseInt(range.value, 10);
-    valEl.textContent = budgetValueLabel(state.budgetAmount);
-    tierEl.textContent = budgetNote(state.budgetAmount);
+  const list = document.getElementById('budgetList');
+  const nextBtn = document.getElementById('nextBtn');
+
+  function select(target){
+    list.querySelectorAll('.choice').forEach(c => c.classList.remove('selected'));
+    target.classList.add('selected');
+    state.budget = parseInt(target.dataset.v, 10);
+    nextBtn.disabled = false;
+  }
+
+  list.addEventListener('click', (e) => { const t = e.target.closest('.choice'); if(t) select(t); });
+  list.addEventListener('keydown', (e) => {
+    if((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('choice')){
+      e.preventDefault(); select(e.target);
+    }
   });
-  document.getElementById('nextBtn').addEventListener('click', () => {
-    state.budget = amountToTier(state.budgetAmount);
-    savePrefs({ budgetAmount: state.budgetAmount });
+
+  nextBtn.addEventListener('click', () => {
+    state.budgetAmount = BUDGET_TIER_AMOUNT[state.budget];
+    savePrefs({ budget: state.budget, budgetAmount: state.budgetAmount });
     state.step++;
     render();
   });
 }
 
 const RADIUS_MIN = 0.5;
-const RADIUS_MAX = 50;
+const RADIUS_MAX = 20;
 
 // Svensk decimalkomma, och inga onödiga decimaler på jämna tal (t.ex. "12 km"
 // istället för "12,0 km").
@@ -2685,7 +2689,7 @@ function formatKm(km){
 
 function radiusValueLabel(km){
   if(km <= RADIUS_MIN) return "Max 0,5 km";
-  if(km >= RADIUS_MAX) return "Max 50 km";
+  if(km >= RADIUS_MAX) return "Max 20 km";
   return formatKm(km);
 }
 
@@ -2695,7 +2699,7 @@ function renderRadius(){
     <h1>Hur långt kan ni <em>tänkas gå?</em></h1>
     <p class="lead">Dra i reglaget för hur stort område vi ska scanna av. Öppna restauranger visas alltid före stängda.</p>
     <input type="range" min="${RADIUS_MIN}" max="${RADIUS_MAX}" step="0.5" value="${state.radius}" id="radiusRange" aria-label="Sökradie i kilometer">
-    <div class="range-val"><span>0,5 km</span><b id="radiusVal">${radiusValueLabel(state.radius)}</b><span>50 km</span></div>
+    <div class="range-val"><span>0,5 km</span><b id="radiusVal">${radiusValueLabel(state.radius)}</b><span>20 km</span></div>
     <div class="spacer"></div>
     <button class="btn btn-primary" id="nextBtn">Nästa</button>
   `;
@@ -2727,7 +2731,12 @@ function renderRadius(){
 const VIBE_PRESETS = [
   { id:"cozy",        label:"Mysigt & lugnt",     desc:"Nära samtal, skön stämning",   tags:["Mysigt","Lugnt","Avslappnat","Bra för samtal"], adventure:2 },
   { id:"social",      label:"Socialt & livligt",  desc:"Mycket folk, hög energi",      tags:["Livlig stämning","Socialt","Högt i tak"],       adventure:4 },
-  { id:"romantic",    label:"Romantiskt",         desc:"Perfekt för två",              tags:["Romantiskt","Datevänligt","Utsikt"],            adventure:3 }
+  { id:"romantic",    label:"Romantiskt",         desc:"Perfekt för två",              tags:["Romantiskt","Datevänligt","Utsikt"],            adventure:3 },
+  // Tomma tags → ingen atmosfärs-viktning alls sätts i buildUserProfile()
+  // (den kollar tagsInclude(vibeTags, ...) för varje dimension), och
+  // reasonFor()/vibePart visar aldrig "matchar er vibe" när vibeTags är
+  // tomt. Ren neutral matchning, precis som innan vibe-steget fanns.
+  { id:"any",         label:"Spelar ingen roll",  desc:"Ingen särskild vibe-preferens", tags:[],                                                adventure:3 }
 ];
 
 // Nyckelord → taggar/äventyrsnivå. Samma tagg-vokabulär som MOCK_PLACES och
@@ -2979,10 +2988,7 @@ function renderResults(matches){
   matches.forEach(p => {
     const pct = Math.round(60 + p.score * 38);
     const card = document.createElement('div');
-    card.className = 'result-card clickable';
-    card.tabIndex = 0;
-    card.setAttribute('role', 'link');
-    card.setAttribute('aria-label', `Öppna ${p.name} i Google Maps`);
+    card.className = 'result-card';
     card.innerHTML = `
       <div class="result-top">
         <div>
@@ -2999,14 +3005,12 @@ function renderResults(matches){
       <div class="chips">${p.tags.map((t,i) => `<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
       ${ratingRow(p)}
       ${hoursBlockHtml(p)}
-      <div class="maps-hint">📍 Öppna i Google Maps ↗</div>
+      <button type="button" class="maps-hint" aria-label="Öppna ${p.name} i Google Maps">📍 Öppna i Google Maps ↗</button>
     `;
-    const openInMaps = () => window.open(mapsUrlFor(p), '_blank', 'noopener');
-    card.addEventListener('click', (e) => { if(e.target.closest('[data-fav], [data-exclude], [data-hours-toggle]')) return; openInMaps(); });
-    card.addEventListener('keydown', (e) => {
-      if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-fav], [data-exclude], [data-hours-toggle]')){
-        e.preventDefault(); openInMaps();
-      }
+    // Endast Maps-knappen öppnar Maps — resten av kortet (namn, text,
+    // chips, rating, öppettider, tom yta) gör medvetet ingenting.
+    card.querySelector('.maps-hint').addEventListener('click', () => {
+      window.open(mapsUrlFor(p), '_blank', 'noopener');
     });
     wireHoursToggles(card);
     frag.appendChild(card);
@@ -3068,7 +3072,7 @@ function renderSpontaneousIntro(){
 
 async function computeSpontaneousMatches(state){
   const budgetTiers = [1,2,3,4];
-  const budgetAmounts = { 1:100, 2:250, 3:500, 4:900 };
+  const budgetAmounts = BUDGET_TIER_AMOUNT; // samma representativa belopp som huvudflödets 4 nivåer
   const radii = [1, 1.5, 2, 3, 4];
   const adventures = [1, 3, 5];
 
@@ -3152,7 +3156,7 @@ async function computeGroupMatches(state){
 
   state.budget = Math.min(4, Math.max(1, Math.round(avg('budget'))));
   state.adventure = Math.min(5, Math.max(1, Math.round(avg('adventure'))));
-  state.budgetAmount = { 1:100, 2:250, 3:500, 4:900 }[state.budget];
+  state.budgetAmount = BUDGET_TIER_AMOUNT[state.budget];
   state.radius = state.radius || 3;
   state.groupSize = people.length;
   if(!state.coords) state.coords = await quickLocation();
@@ -3233,7 +3237,7 @@ function renderEveningPlan(plan){
     row.className = 'timeline-item';
     row.innerHTML = `
       <div class="timeline-track"><div class="timeline-dot"></div><div class="timeline-line"></div></div>
-      <div class="timeline-content clickable" tabindex="0" role="link" aria-label="Öppna ${p.name} i Google Maps">
+      <div class="timeline-content">
         <div class="result-top" style="margin-bottom:0;">
           <div>
             <div class="timeline-time">${item.time} · ${item.label}</div>
@@ -3249,14 +3253,14 @@ function renderEveningPlan(plan){
         <div class="chips">${p.tags.map((t,i)=>`<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
         ${ratingRow(p)}
         ${hoursBlockHtml(p)}
-        <div class="maps-hint">📍 Öppna i Google Maps ↗</div>
+        <button type="button" class="maps-hint" aria-label="Öppna ${p.name} i Google Maps">📍 Öppna i Google Maps ↗</button>
       </div>
     `;
     const content = row.querySelector('.timeline-content');
-    const openInMaps = () => window.open(mapsUrlFor(p), '_blank', 'noopener');
-    content.addEventListener('click', (e) => { if(e.target.closest('[data-fav], [data-exclude], [data-hours-toggle]')) return; openInMaps(); });
-    content.addEventListener('keydown', (e) => {
-      if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-fav], [data-exclude], [data-hours-toggle]')){ e.preventDefault(); openInMaps(); }
+    // Endast Maps-knappen öppnar Maps — resten av raden gör medvetet
+    // ingenting, precis som resultatkorten i renderResults.
+    content.querySelector('.maps-hint').addEventListener('click', () => {
+      window.open(mapsUrlFor(p), '_blank', 'noopener');
     });
     wireHoursToggles(content);
     row.querySelector('[data-fav]').addEventListener('click', (e) => {
