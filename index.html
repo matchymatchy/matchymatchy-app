@@ -683,7 +683,11 @@ const PlacesProvider = (() => {
         type: typeLabel,
         price: mapGooglePriceLevel(p.priceLevel),
         dist: haversineKm(criteria.coords, { lat: p.location.latitude, lng: p.location.longitude }),
-        adv: 3, // Google har ingen "äventyrsnivå" — härled från types/rating vid behov
+        // Google ger ingen "äventyrsnivå" för riktiga sökresultat. Tidigare
+        // stod det en HÅRDKODAD adv:3 här för ALLA live-träffar, som om det
+        // vore känd fakta — borttaget. buildRestaurantProfile() härleder nu
+        // adventure ärligt (tagg-signal om den finns, annars explicit okänt)
+        // istället för att låtsas veta något Google faktiskt inte ger oss.
         tags: typeLabel ? [typeLabel, ...extraTags] : extraTags,
         trait: liveTrait(p, typeLabel, { servesAlcohol, outdoorSeating: !!p.outdoorSeating, goodForGroups: !!p.goodForGroups }),
         traitStandalone: true,
@@ -693,6 +697,13 @@ const PlacesProvider = (() => {
         lat: p.location.latitude,
         lng: p.location.longitude,
         placeId: p.id || null,
+        // Rå typ-lista + ev. redaktionell text — används av
+        // buildRestaurantProfile()/detectCuisine()/detectVenueCategory() för
+        // att avgöra köksstil och venue-kategori, eftersom Google inte ger
+        // ett rent "cuisine"-fält för de flesta ställen. Kostar inget extra:
+        // båda hämtas redan via FieldMask.
+        types: Array.isArray(p.types) ? p.types : [],
+        editorialSummary: p.editorialSummary?.text || null,
         // "openNow" tas från currentOpeningHours i första hand (tar hänsyn
         // till tillfälliga avvikelser som helgdagar); faller tillbaka på
         // regularOpeningHours om den saknas. null = Google gav ingen
@@ -704,7 +715,7 @@ const PlacesProvider = (() => {
         // svenska tack vare languageCode i anropet) — används både för
         // dagens rad och den expanderbara veckolistan i UI:t.
         weekdayHours: p.regularOpeningHours?.weekdayDescriptions || null,
-        // Flaggar snabbmatskedjor för scorePlace() istället för att
+        // Flaggar snabbmatskedjor för Matching Engine istället för att
         // plocka bort dem helt — de ska kunna dyka upp ibland, bara inte
         // ofta eller högt rankade (se isQuickServiceChain nedan).
         isChain: isQuickServiceChain(p),
@@ -860,79 +871,445 @@ const PlacesProvider = (() => {
 })();
 
 /* =========================================================================
-   MATCHNINGSLOGIK
-   Ren funktion: tar platser + kvizsvar, returnerar rankade matchningar.
-   Oberoende av var platserna kom ifrån (mock eller live).
+/* =========================================================================
+   MATCHNINGSMOTOR
+   ----------------------------------------------------------------------
+   Arkitektur: USER (quiz) → buildUserProfile()
+               Google Places → kandidater (PlacesProvider, oförändrad;
+                 Googles egen sökordning/popularitet används ALDRIG som en
+                 rankningssignal här — den kastas bort så fort kandidaterna
+                 är hämtade, se scoreCandidate/stableJitter)
+               Kandidat → buildRestaurantProfile() (internt format)
+               → applyHardFilters() (bort med uppenbart fel)
+               → matchRestaurant() (kontextberoende vikter + breakdown)
+               → selectTopMatches() (kvalitet före att fylla tre platser)
+
+   DESIGNPRINCIPER (samlar ihop tidigare bias-genomgångar i ett svep):
+   1. OKÄND DATA FÅR ALDRIG SE UT SOM EN TRÄFF. Varje atmosfär-/äventyrs-/
+      samtalsdimension är {value, confidence}. Saknas verklig evidens
+      (confidence 0) bidrar dimensionen INTE till matchningen — den sänker
+      bara vår SÄKERHET i helhetsbetyget, den räknas aldrig som "troligen
+      mysig" bara för att systemet behöver en siffra.
+   2. CAFÉ/RESTAURANG/BAR KONKURRERAR INTE PÅ LIKA VILLKOR. Google-sökningen
+      hämtar restaurant+bar+cafe tillsammans (bra för täckning), men en
+      egen, EXPLICIT venue-dimension (detectVenueCategory + 
+      VENUE_COMPATIBILITY) viktar kategori mot vad användaren faktiskt vill
+      (måltid/fika/drinkar) — inget gömt inuti atmosfären.
+   3. KONTEXT (dejt/vänner-lämplighet) KRÄVER FAKTISK EVIDENS — byggs inte
+      längre av en formel ovanpå en annan gissning plus en hårdkodad
+      baslinje för alla.
+   4. INGEN DOLD KVALITETS-/POPULARITETSBIAS. Betyg är en LITEN, tydligt
+      avgränsad vikt (aldrig störst) — en 4.8:a som inte matchar profilen
+      ska kunna förlora mot en 4.3:a som gör det.
+   5. DETERMINISTISK RANKNING. En namnbaserad mikro-jitter ersätter
+      Math.random() — samma svar + samma kandidater ger alltid samma
+      ordning. "Sök igen" varierar ändå, men bara genom att exkludera
+      redan visade ställen (seenNames), aldrig genom nytt slumpbrus.
+   6. DIAGNOSTIK. Sätt window.MATCHYMATCHY_DEBUG = true i konsolen för att
+      se en fullständig breakdown (vikter, evidens, okända fält) för varje
+      kandidat vid varje sökning.
    ========================================================================= */
-// VARFÖR SAMMA STÄLLEN OFTA TOPPADE LISTAN TIDIGARE (och varför det är
-// åtgärdat här): tre saker samverkade.
-//   1. "adv" (äventyrsnivå) sattes till en HÅRDKODAD konstant (3) för all
-//      riktig Google-data, se fetchLive() — den termen var alltså inert
-//      för live-sökningar och gjorde ingen faktisk skillnad, bara plats i
-//      formeln. ("matchar hur äventyrliga ni är"-texten var av samma skäl
-//      mest en slump-sanning, inte en riktig personalisering — borttagen
-//      från reasonFor(), se vibeDescriptor() ovan istället.)
-//   2. Betyg/antal recensioner hämtades från Google och visades i UI:t,
-//      men påverkade ALDRIG rankingen — två annars likvärdiga ställen
-//      (samma pris, samma avstånd) rankades då godtyckligt (i praktiken:
-//      i den ordning Google råkade returnera dem), inte efter vilket som
-//      faktiskt var bättre.
-//   3. Matchningen var 100% deterministisk — samma svar gav alltid EXAKT
-//      samma ordning, varje gång, för alltid. Ingen variation, inget sätt
-//      för systemet att lära sig vad just DU gillar över tid.
-// Åtgärdat nedan med tre tillägg: en riktig kvalitetssignal (rating), en
-// lärande personaliseringssignal (favoriteAffinityScore, byggd på vilka
-// taggar man faktiskt sparat som favorit), och ett litet slumpmässigt
-// jitter så att jämnstarka alternativ roterar mellan besök istället för
-// att samma vinnare upprepas i evighet. isChain-avdraget och den hårda
-// öppet/stängt-prioriteringen (compareByOpenThenScore) är oförändrade.
-function scorePlace(p, state){
-  const priceScore = 1 - (Math.abs(p.price - state.budget) / 3);
-  const distScore = p.dist <= state.radius ? 1 : Math.max(0, 1 - ((p.dist - state.radius) / 2));
-  const advScore = 1 - (Math.abs(p.adv - state.adventure) / 4);
-  const ratingScore = typeof p.rating === "number" ? Math.max(0, Math.min(1, (p.rating - 3) / 2)) : 0.5;
-  const affinityScore = favoriteAffinityScore(p, getFavoriteTagWeights());
 
-  let score =
-    priceScore    * 0.34 +
-    distScore     * 0.28 +
-    advScore      * 0.10 +
-    ratingScore   * 0.14 +
-    affinityScore * 0.14;
+function clamp01(n){ return Math.max(0, Math.min(1, n)); }
+function tagsInclude(list, ...wanted){ return (list || []).some(t => wanted.includes(t)); }
 
-  // ±3% slump — aldrig tillräckligt för att knuffa ett klart sämre ställe
-  // före ett klart bättre, men tillräckligt för att jämnstarka alternativ
-  // ska kunna byta plats mellan olika besök/sökningar.
-  score += (Math.random() - 0.5) * 0.06;
+// Läget avgör default-kontext; en tydlig vibe kan flytta den (en romantisk
+// vibe i "Nu"-läget ska ändå matchas ungefär som en dejt).
+const MODE_TO_CONTEXT = { now:'general', tonight:'general', spontaneous:'general', date:'date', group:'friends' };
 
-  // Snabbmatskedjor (Max, McDonald's, KFC m.fl.) blockeras inte längre
-  // helt — de kan fortfarande dyka upp om inget bättre finns i närheten —
-  // men får ett rejält poängavdrag så de sällan konkurrerar på lika
-  // villkor med "riktiga" restauranger/barer/caféer och nästan aldrig
-  // hamnar högst upp om det finns bättre alternativ.
-  if(p.isChain) score *= 0.45;
-  return Math.max(0, score);
+// Kontextberoende vikter — alla tre profiler summerar till 1.0. "venue"
+// (kategori-kompatibilitet) är en EGEN dimension, inte gömd inuti
+// atmosfären, så en café/bar aldrig kan tvätta bort en dålig passform mot
+// måltids-avsikten bara genom att vara mysig.
+const CONTEXT_WEIGHTS = {
+  date:    { venue:0.14, cuisine:0.14, atmosphere:0.26, context:0.12, budget:0.09, adventure:0.07, conversation:0.08, distance:0.06, quality:0.04 },
+  friends: { venue:0.14, cuisine:0.13, atmosphere:0.18, context:0.14, budget:0.10, adventure:0.11, conversation:0.05, distance:0.09, quality:0.06 },
+  general: { venue:0.18, cuisine:0.16, atmosphere:0.14, context:0.07, budget:0.15, adventure:0.09, conversation:0.04, distance:0.13, quality:0.04 }
+};
+
+// Köksstil finns inte som ett rent Google-fält för de flesta ställen —
+// detekteras via nyckelord mot namn/typ/rå typlista/redaktionell text.
+// 0.75 (inte 1.0) markerar medvetet att det är en HÄRLEDD gissning, inte
+// ett garanterat Google-fält — se confidence.cuisine i buildRestaurantProfile.
+const CUISINE_KEYWORDS = {
+  italiensk:"italien,pizza,pasta,trattoria,osteria,italian", turkisk:"turkisk,turkiet,kebab,meze,anatol,turkish",
+  japansk:"japan,sushi,ramen,izakaya,sashimi", thailändsk:"thai",
+  kinesisk:"kines,kina,dim sum,sichuan,szechuan,chinese", indisk:"indisk,indien,curry,tandoori,biryani,indian",
+  mexikansk:"mexik,taco,burrito,tex-mex,mexican", grekisk:"grekisk,grekland,souvlaki,taverna,greek",
+  spansk:"spansk,tapas,paella,spanish", fransk:"fransk,frankrike,bistro,brasserie,french",
+  mellanöstern:"libanes,mellanöstern,falafel,hummus,shawarma,lebanese", koreansk:"korean,korea,bibimbap",
+  vietnamesisk:"vietnam,banh mi,pho", amerikansk:"amerikansk,burgare,hamburger,bbq,steakhouse,american",
+  fisk_skaldjur:"fisk,skaldjur,sjömat,ostron,seafood", nordisk:"svensk,nordisk,husmanskost,swedish,nordic"
+};
+function detectCuisine(hay){
+  const lower = (hay || "").toLowerCase();
+  const found = {};
+  Object.entries(CUISINE_KEYWORDS).forEach(([label, words]) => {
+    if(words.split(",").some(w => lower.includes(w))) found[label] = 0.75;
+  });
+  return found;
+}
+
+/* -------------------------------------------------------------------------
+   VENUE CATEGORY
+   Normaliserar varje kandidat till EN tydlig kategori, och en separat
+   "avsikt" härleds ur användarens vibe/läge, så en café inte kan
+   konkurrera på lika villkor med en restaurang när avsikten uppenbart är
+   en måltid (och tvärtom för fika/drinkar). Bygger ENDAST på Googles egna
+   typ-fält (`types`) med `type`-textetiketten som reservlösning — ingen
+   specifik verksamhet hårdkodas, bara generella mönster.
+   ------------------------------------------------------------------------- */
+function detectVenueCategory(p){
+  const rawTypes = (p.types || []).join(" ").toLowerCase();
+  const label = (p.type || "").toLowerCase();
+  if(/\bcafe\b|coffee_shop|bakery/.test(rawTypes) || /café|cafe|kaffe|bakverk|kondis|bageri|fika/.test(label)) return 'cafe';
+  if(/\bbar\b|pub|night_club|wine_bar|brewery/.test(rawTypes) || /\bbar\b|pub|nattklubb|bryggeri|speakeasy/.test(label)) return 'bar';
+  if(/restaurant/.test(rawTypes) || /restaurang|krog|kök|matsal|bistro|grill|pizzeria|gatukök/.test(label)) return 'restaurant';
+  return 'other';
+}
+
+// Vad ÄR användaren egentligen ute efter — en måltid, fika, eller
+// drinkar/nattliv? Härleds enbart från explicita signaler (vibe-taggar,
+// läge) — "meal" är en medveten DEFAULT (inte en gissning om preferens)
+// eftersom det är det vanligaste ärendet och det Google-anropet redan är
+// riktat mot.
+function detectUserIntent(state){
+  const tags = state.vibeTags || [];
+  if(tagsInclude(tags, "Fika")) return 'fika';
+  if(tagsInclude(tags, "Alkohol") && !tagsInclude(tags, "Mat")) return 'drinks';
+  return 'meal';
+}
+
+// Hur bra passar en kategori en given avsikt. Medvetet MJUKT (0.2–1.0),
+// inte ett hårt filter — en café ska INTE konkurrera på lika villkor med
+// en restaurang för en måltid, men ska ändå kunna dyka upp om resten är
+// exceptionellt. "other" (t.ex. en oklassad bagare) hamnar mitt emellan.
+const VENUE_COMPATIBILITY = {
+  meal:   { restaurant: 1.00, bar: 0.50, cafe: 0.30, other: 0.45 },
+  fika:   { cafe: 1.00, restaurant: 0.45, bar: 0.25, other: 0.45 },
+  drinks: { bar: 1.00, restaurant: 0.55, cafe: 0.20, other: 0.40 }
+};
+function venueCompatibilityScore(category, intent){
+  const table = VENUE_COMPATIBILITY[intent] || VENUE_COMPATIBILITY.meal;
+  return table[category] ?? table.other;
+}
+
+/* -------------------------------------------------------------------------
+   STEG 1 — ANVÄNDARPROFIL
+   Förvandlar quiz-svaren till ett strukturerat objekt. atmosphereWeights
+   uttrycker hur mycket användaren FAKTISKT brytt sig om varje dimension
+   (0 om den aldrig nämndes) — det är det som gör att en dimension ingen
+   sa något om inte kan "matcha" mot en restaurangs okända värde, se
+   atmosphereMatchScore.
+   ------------------------------------------------------------------------- */
+function buildUserProfile(state){
+  const adventure01 = clamp01((state.adventure - 1) / 4); // 1–5 → 0–1
+  const vibeTags = state.vibeTags || [];
+
+  const atmosphere = { cozy:0.5, lively:0.5, romantic:0.5, adventurous: adventure01, quiet:0.5 };
+  // adventurous har alltid en (låg-medel) vikt eftersom quizet HAR ett
+  // eget reglage för den — övriga dimensioner väger 0 tills en vibe-tagg
+  // uttryckligen sätter dem.
+  const atmosphereWeights = { cozy:0, lively:0, romantic:0, adventurous:0.35, quiet:0 };
+
+  if(tagsInclude(vibeTags, "Mysigt","Avslappnat")){ atmosphere.cozy = 0.85; atmosphereWeights.cozy = 0.7; }
+  if(tagsInclude(vibeTags, "Livlig stämning","Socialt","Högt i tak")){ atmosphere.lively = 0.85; atmosphereWeights.lively = 0.7; }
+  if(tagsInclude(vibeTags, "Romantiskt","Datevänligt") || state.mode === 'date'){ atmosphere.romantic = 0.8; atmosphereWeights.romantic = 0.6; }
+  if(tagsInclude(vibeTags, "Äventyrligt","Hemlig entré")){ atmosphere.adventurous = 0.85; atmosphereWeights.adventurous = 0.7; }
+  if(tagsInclude(vibeTags, "Lugnt")){ atmosphere.quiet = 0.8; atmosphereWeights.quiet = 0.7; }
+
+  let context = MODE_TO_CONTEXT[state.mode] || 'general';
+  if(state.vibeId === 'romantic' && context !== 'date') context = 'date';
+  if(state.vibeId === 'social' && context === 'general') context = 'friends';
+
+  return {
+    context,
+    mode: state.mode,
+    intent: detectUserIntent(state),
+    pricePreference: state.budget,       // 1–4, samma skala som restaurantProfile.priceLevel
+    distancePreference: state.radius,    // km
+    adventure: adventure01,
+    atmosphere,
+    atmosphereWeights,
+    cuisinePreferences: detectCuisine(state.customVibeText || ""),
+    vibeTags,
+    favoriteTagWeights: getFavoriteTagWeights()
+  };
+}
+
+/* -------------------------------------------------------------------------
+   STEG 2 — RESTAURANGPROFIL
+   Normaliserar en kandidat (mock ELLER live) till matchymatchys interna
+   format. atmosphere-dimensioner är {value, confidence} — en dimension
+   utan evidens ({confidence: 0}) ska ALDRIG kunna se ut som en bekräftad
+   matchning, bara som "vi vet inte". suitableFor kräver på samma sätt
+   faktisk evidens (taggar) innan den sätts högt.
+   ------------------------------------------------------------------------- */
+function buildRestaurantProfile(p){
+  const tags = p.tags || [];
+  const has = (...list) => tagsInclude(tags, ...list);
+  const hay = [p.name, p.type, ...(p.types || []), p.editorialSummary || ""].join(" ");
+
+  const cuisine = detectCuisine(hay);
+  const cuisineConfidence = Object.keys(cuisine).length ? 0.65 : 0.15;
+
+  const venueCategory = detectVenueCategory(p);
+
+  // Varje dimension: {value, confidence}. confidence 0 = OKÄNT, ska
+  // varken räknas som "likt" eller "olikt" i matchningen — bara sänka
+  // säkerheten i helhetsbetyget (se atmosphereMatchScore).
+  const mk = (hit, value, conf) => hit ? { value, confidence: conf } : { value: 0.5, confidence: 0 };
+  const atmosphere = {
+    cozy:        mk(has("Mysigt","Avslappnat"), 0.8, 0.7),
+    lively:      mk(has("Livlig stämning","Socialt","Högt i tak"), 0.8, 0.7),
+    romantic:    mk(has("Romantiskt","Datevänligt"), 0.8, 0.7),
+    quiet:       mk(has("Lugnt"), 0.75, 0.7),
+    adventurous: (() => {
+      // Adventure: tidigare en HÅRDKODAD 3 för all live-data (låtsades
+      // vara känd fakta). Nu: mockdatans handplockade värde (om det finns,
+      // lägre confidence eftersom det är en kurerad gissning) blandat med
+      // en riktig tagg-signal, annars ÄRLIGT okänt.
+      if(has("Äventyrligt","Hemlig entré")) return { value: 0.8, confidence: 0.65 };
+      if(typeof p.adv === "number") return { value: clamp01((p.adv - 1) / 4), confidence: 0.35 };
+      return { value: 0.5, confidence: 0 };
+    })()
+  };
+
+  const conversationKnown = has("Bra för samtal");
+  const conversation = conversationKnown
+    ? { value: 0.85, confidence: 0.6 }
+    : { value: 0.5, confidence: 0 }; // gissa INTE samtalskvalitet från atmosfär — ingen egen evidens, ingen poäng
+
+  // Hur väl passar just DET HÄR stället olika situationer. Kräver FAKTISK
+  // evidens innan en hög poäng sätts — annars {confidence: 0} så
+  // contextMatchScore drar den mot neutralt istället för att lita på en
+  // gissning byggd på andra gissningar.
+  const suitableFor = {
+    date: (atmosphere.romantic.confidence > 0)
+      ? { value: clamp01(0.4 + atmosphere.romantic.value * 0.5 + atmosphere.cozy.value * 0.15 * atmosphere.cozy.confidence), confidence: 0.6 }
+      : { value: 0.5, confidence: 0 },
+    friends: (has("Socialt") || atmosphere.lively.confidence > 0)
+      ? { value: clamp01(0.4 + atmosphere.lively.value * 0.4 + (has("Socialt") ? 0.2 : 0)), confidence: 0.55 }
+      : { value: 0.5, confidence: 0 },
+    general: { value: 0.5, confidence: 0 } // inget läge har egen evidens för "allmänt" — alltid neutralt
+  };
+
+  return {
+    id: p.placeId || p.name,
+    name: p.name,
+    venueCategory,
+    location: { lat: p.lat ?? null, lng: p.lng ?? null, distance: p.dist },
+    cuisine,
+    atmosphere,
+    conversation,
+    suitableFor,
+    priceLevel: p.price,
+    rating: typeof p.rating === "number" ? p.rating : null,
+    reviewCount: p.reviews || 0,
+    capabilities: {
+      food: venueCategory !== 'bar', // grovt: bar-kategorin är inte primärt mat, resten antas servera mat
+      alcohol: has("Alkohol"),
+      vegetarian: !!p.servesVegetarianFood,
+      outdoorSeating: !!p.outdoorSeating,
+      groups: has("Socialt")
+    },
+    confidence: { cuisine: cuisineConfidence, atmosphere: null /* per dimension, se ovan */ }
+  };
+}
+
+/* -------------------------------------------------------------------------
+   STEG 4 — HÅRDA FILTER
+   Sådant som uppenbart inte passar bort helt, INNAN poängsättning.
+   ------------------------------------------------------------------------- */
+function applyHardFilters(rawPlaces, userProfile){
+  let out = filterExcluded(rawPlaces); // "Inte för mig" — permanent, alltid hårt
+
+  // Strikt fel budget: 3 nivåer ifrån av 4 (t.ex. "€" mot "€€€€"). Allt
+  // inom det spannet hanteras av den mjuka budget-poängen i matchRestaurant.
+  out = out.filter(p => Math.abs(p.price - userProfile.pricePreference) < 3);
+
+  // För långt bort: den mjuka distansavtoningen sköter allt nära vald
+  // radie — det här är bara skyddet mot uppenbart orimligt avstånd.
+  const maxDist = userProfile.distancePreference * 2 + 3;
+  out = out.filter(p => p.dist <= maxDist);
+
+  return out;
+}
+
+/* -------------------------------------------------------------------------
+   STEG 5/6 — MJUK POÄNGSÄTTNING + BREAKDOWN
+   ------------------------------------------------------------------------- */
+function cuisineMatchScore(restaurantCuisine, userCuisinePrefs){
+  const rKeys = Object.keys(restaurantCuisine);
+  if(!rKeys.length) return 0.5; // okänd köksstil = neutralt, straffas inte
+  if(!Object.keys(userCuisinePrefs || {}).length) return 0.6; // ingen uttalad preferens
+  let best = 0;
+  rKeys.forEach(c => { if(userCuisinePrefs[c]) best = Math.max(best, userCuisinePrefs[c] * restaurantCuisine[c]); });
+  return best || 0.35;
+}
+
+// En dimension räknas bara in om ANVÄNDAREN brydde sig (uWeights[d] > 0)
+// OCH restaurangen har verklig evidens (rAtm[d].confidence > 0). Saknas
+// evidens på restaurangens sida bidrar dimensionen INTE till matchen —
+// den sänker bara vår sammanlagda säkerhet.
+function atmosphereMatchScore(rAtm, uAtm, uWeights){
+  const dims = Object.keys(uWeights || {}).filter(d => uWeights[d] > 0);
+  if(!dims.length) return 0.5;
+  let weightedSum = 0, weightTotal = 0;
+  dims.forEach(d => {
+    const r = rAtm[d];
+    const w = uWeights[d] * (r ? r.confidence : 0);
+    if(w <= 0) return; // ingen evidens från restaurangen — räknas inte alls
+    weightedSum += w * (1 - Math.abs((r.value ?? 0.5) - uAtm[d]));
+    weightTotal += w;
+  });
+  if(!weightTotal) return 0.5; // användaren brydde sig, men vi vet inget om restaurangen — ärligt neutralt
+  return clamp01(weightedSum / weightTotal);
+}
+
+// Drar poängen mot neutralt (0.5) i proportion till HUR SÄKER vi faktiskt
+// är, istället för att lita fullt på en gissning. confidence 0 → alltid
+// exakt 0.5, oavsett vilket value som råkar ligga där.
+function contextMatchScore(restaurant, userProfile){
+  const s = restaurant.suitableFor[userProfile.context] || restaurant.suitableFor.general;
+  return clamp01(0.5 + (s.value - 0.5) * s.confidence);
+}
+
+function matchRestaurant(restaurant, userProfile){
+  const weights = CONTEXT_WEIGHTS[userProfile.context] || CONTEXT_WEIGHTS.general;
+
+  const priceScore = clamp01(1 - Math.abs(restaurant.priceLevel - userProfile.pricePreference) / 3);
+  const distScore = restaurant.location.distance <= userProfile.distancePreference
+    ? 1
+    : clamp01(1 - ((restaurant.location.distance - userProfile.distancePreference) / 3));
+  // Äventyr: samma confidence-nedtoning som atmosfären — en gissning ska
+  // dra mot neutralt (0.6), inte räknas som en full matchning/mismatch.
+  const rAdv = restaurant.atmosphere.adventurous;
+  const advDiff = 1 - Math.abs(rAdv.value - userProfile.adventure);
+  const adventureScore = rAdv.confidence > 0 ? clamp01(advDiff) : clamp01(0.5 + (advDiff - 0.5) * 0.3);
+  const qualityScore = restaurant.rating != null ? clamp01((restaurant.rating - 3) / 2) : 0.5;
+  const cuisineScore = cuisineMatchScore(restaurant.cuisine, userProfile.cuisinePreferences);
+  const atmosphereScore = atmosphereMatchScore(restaurant.atmosphere, userProfile.atmosphere, userProfile.atmosphereWeights);
+  const contextScore = contextMatchScore(restaurant, userProfile);
+  const conversationScore = restaurant.conversation.confidence > 0 ? restaurant.conversation.value : 0.5;
+  const venueScore = venueCompatibilityScore(restaurant.venueCategory, userProfile.intent);
+
+  const breakdown = { venue: venueScore, cuisine: cuisineScore, atmosphere: atmosphereScore, context: contextScore,
+    budget: priceScore, adventure: adventureScore, conversation: conversationScore,
+    distance: distScore, quality: qualityScore };
+
+  const total =
+    venueScore        * weights.venue +
+    cuisineScore      * weights.cuisine +
+    atmosphereScore   * weights.atmosphere +
+    contextScore      * weights.context +
+    priceScore        * weights.budget +
+    adventureScore    * weights.adventure +
+    conversationScore * weights.conversation +
+    distScore         * weights.distance +
+    qualityScore      * weights.quality;
+
+  return { total, breakdown, weights };
+}
+
+// Deterministisk mikro-jitter: baserad på NAMNET, alltså identisk varje
+// gång för samma ställe. Bryter exakta oavgjorda (och förhindrar att
+// Googles egen, stabila sökordning tyst blir en tie-breaker) utan att
+// låta två separata sökningar med IDENTISKA svar ge olika ordning.
+function stableJitter(name){
+  let hash = 0;
+  for(let i = 0; i < (name || "").length; i++){ hash = (hash * 31 + name.charCodeAt(i)) | 0; }
+  return (((hash % 1000) + 1000) % 1000 / 1000 - 0.5) * 0.01; // ±0.5%
+}
+
+// Bygger diagnostik: vilka faktorer var KÄNDA (med evidens) kontra OKÄNDA
+// för just den här kandidaten. Sätt window.MATCHYMATCHY_DEBUG = true i
+// konsolen för att se detta live vid varje sökning (se scoreCandidate).
+function buildDiagnostics(profile, breakdown, weights){
+  const evidence = [];
+  const unknown = [];
+  if(Object.keys(profile.cuisine).length) evidence.push(`Kök: ${Object.keys(profile.cuisine).join(", ")} (nyckelord i namn/typ/beskrivning)`);
+  else unknown.push("Kök: okänt");
+  ['cozy','lively','romantic','quiet','adventurous'].forEach(d => {
+    const dim = profile.atmosphere[d];
+    if(dim.confidence > 0) evidence.push(`Atmosfär (${d}): ${dim.value.toFixed(2)} från tagg`);
+    else unknown.push(`Atmosfär (${d}): okänt`);
+  });
+  if(profile.conversation.confidence > 0) evidence.push(`Samtalskvalitet: tagg "Bra för samtal"`);
+  else unknown.push("Samtalskvalitet: okänt");
+  if(profile.suitableFor.date.confidence > 0) evidence.push(`Dejt-lämplighet: härledd från romantik/mysig-evidens`);
+  else unknown.push("Dejt-lämplighet: okänt/neutralt");
+  if(profile.suitableFor.friends.confidence > 0) evidence.push(`Vän-lämplighet: härledd från socialt/livlig-evidens`);
+  else unknown.push("Vän-lämplighet: okänt/neutralt");
+  evidence.push(`Kategori: ${profile.venueCategory} (från Googles types/typetikett)`);
+  if(profile.capabilities.alcohol) evidence.push("Alkohol: tagg (härledd från Google servesBeer/Wine/Cocktails)");
+  if(profile.capabilities.groups) evidence.push("Grupper: tagg \"Socialt\" (härledd från Google goodForGroups)");
+  if(profile.rating != null) evidence.push(`Betyg: ${profile.rating} (${profile.reviewCount} recensioner)`);
+  else unknown.push("Betyg: okänt");
+
+  const reasons = Object.entries(breakdown)
+    .map(([factor, strength]) => ({ factor, strength: Math.round(strength * 100), contribution: Math.round(strength * (weights[factor] || 0) * 100) }))
+    .sort((a, b) => b.contribution - a.contribution);
+
+  return { evidence, unknown, reasons };
+}
+
+// Bygger restaurangprofilen, kör den genom matchningsmotorn för EN
+// kandidat, och lägger på personalisering/kedjeavdrag/mikro-jitter.
+function scoreCandidate(rawPlace, userProfile){
+  const profile = buildRestaurantProfile(rawPlace);
+  const { total, breakdown, weights } = matchRestaurant(profile, userProfile);
+  const affinityScore = favoriteAffinityScore(rawPlace, userProfile.favoriteTagWeights);
+  const personalizationWeight = Object.keys(userProfile.favoriteTagWeights).length ? 0.12 : 0;
+
+  let score = total * (1 - personalizationWeight) + affinityScore * personalizationWeight;
+  score += stableJitter(rawPlace.name);
+  // Snabbmatskedjor blockeras inte helt, men konkurrerar sällan högt.
+  if(rawPlace.isChain) score *= 0.45;
+  score = clamp01(score);
+
+  const pct100 = (n) => Math.round(clamp01(n) * 100);
+  const diagnostics = buildDiagnostics(profile, breakdown, weights);
+
+  if(typeof window !== "undefined" && window.MATCHYMATCHY_DEBUG){
+    console.log(`%c${rawPlace.name} → ${pct100(score)}%`, "font-weight:bold", {
+      venueCategory: profile.venueCategory,
+      intent: userProfile.intent,
+      breakdown: Object.fromEntries(Object.entries(breakdown).map(([k,v]) => [k, pct100(v)])),
+      weights,
+      evidence: diagnostics.evidence,
+      unknown: diagnostics.unknown
+    });
+  }
+
+  return {
+    ...rawPlace,
+    score,
+    matchScore: {
+      totalScore: pct100(score),
+      breakdown: {
+        venue: pct100(breakdown.venue), cuisine: pct100(breakdown.cuisine), atmosphere: pct100(breakdown.atmosphere),
+        context: pct100(breakdown.context), budget: pct100(breakdown.budget),
+        adventure: pct100(breakdown.adventure), conversation: pct100(breakdown.conversation),
+        distance: pct100(breakdown.distance), quality: pct100(breakdown.quality),
+        personalization: pct100(affinityScore)
+      },
+      evidence: diagnostics.evidence,
+      unknown: diagnostics.unknown,
+      reasons: diagnostics.reasons
+    },
+    restaurantProfile: profile
+  };
 }
 
 // Öppna ställen (openNow===true ELLER null/okänt) ska ALLTID rankas före
 // stängda (openNow===false) — oavsett poäng. Bara om det inte finns några
-// öppna alls faller listan tillbaka på stängda ställen. Det här är alltså
-// en hård prioritetsordning, inte bara ett poängavdrag — används istället
-// för ett vanligt score-baserat sort() överallt där platser rankas.
+// öppna alls faller listan tillbaka på stängda ställen.
 function compareByOpenThenScore(a, b){
   const aClosed = a.openNow === false;
   const bClosed = b.openNow === false;
   if(aClosed !== bClosed) return aClosed ? 1 : -1;
   return b.score - a.score;
-}
-
-// Ger bonuspoäng till platser vars taggar matchar en lista — används av
-// t.ex. "Dejt"-läget (romantiska taggar) och den fritt tolkade vibe-texten
-// i steg 4 för att vikta matchningarna mot rätt känsla, utöver den vanliga
-// scorePlace.
-function tagBonus(p, tagList){
-  const hits = p.tags.filter(t => tagList.includes(t)).length;
-  return Math.min(1, hits * 0.5);
 }
 
 // Lägen som inte har ett eget platssteg (Spontant, Med vänner) behöver
@@ -1146,29 +1523,42 @@ function reasonFor(p, state){
   return `${parts[0].charAt(0).toUpperCase()+parts[0].slice(1)}, ${parts[1]} och ${parts[2]}.${traitPart}${vibePart}${favPart}`;
 }
 
-// Ger bonuspoäng mot förslag som matchar den vibe gänget valt (eller den
-// AI-tolkade egna vibe-texten) i steg 4 — ovanpå den vanliga scorePlace().
-// Fungerar precis som tagBonus/DATE_BONUS_TAGS men styrs
-// av vad användaren faktiskt valde i vibe-steget istället för att vara
-// hårdkodat per läge.
-function scoreWithVibe(p, state, vibeWeight = 0.25){
-  const base = scorePlace(p, state);
-  if(!state.vibeTags || !state.vibeTags.length) return base;
-  return base * (1 - vibeWeight) + tagBonus(p, state.vibeTags) * vibeWeight;
-}
-
 // Plockar ut de N bästa ur en redan poängsatt+sorterad lista, men hoppar
 // över ställen som redan visats i det här sökpasset (state.seenNames) —
 // det är det som gör att "Sök igen" ger nya alternativ istället för att
 // visa exakt samma kort igen. Om för få ovisade ställen finns kvar (t.ex.
 // när man klickat "Sök igen" så många gånger att alla har visats) börjar
-// vi om cykeln istället för att fastna på ett tomt resultat.
+// vi om cykeln istället för att fastna på ett tomt resultat. Används av
+// kvällsplanen (ett enda plock per tidslucka) — se selectTopMatches()
+// nedan för toppresultat-listan, som även prioriterar kvalitet.
 function pickUnseen(sortedPlaces, state, n = 3){
   let pool = sortedPlaces.filter(p => !state.seenNames.includes(p.name));
   if(pool.length < n){
     state.seenNames = [];
     pool = sortedPlaces;
   }
+  const picked = pool.slice(0, n);
+  picked.forEach(p => { if(!state.seenNames.includes(p.name)) state.seenNames.push(p.name); });
+  return picked;
+}
+
+// Samma "sök igen"-princip som pickUnseen (visa inte exakt samma igen),
+// men prioriterar KVALITET över att alltid fylla tre platser: ett ställe
+// visas bara om det håller minst 55% av toppresultatets poäng. Finns det
+// inte tre riktigt bra alternativ återlämnas hellre färre, ärliga förslag
+// än att fylla ut med skräp.
+const MATCH_QUALITY_FLOOR_RATIO = 0.55;
+function selectTopMatches(sortedPlaces, state, n = 3){
+  if(!sortedPlaces.length) return [];
+  const floor = sortedPlaces[0].score * MATCH_QUALITY_FLOOR_RATIO;
+  const good = sortedPlaces.filter(p => p.score >= floor);
+
+  let pool = good.filter(p => !state.seenNames.includes(p.name));
+  if(pool.length < Math.min(n, good.length)){
+    state.seenNames = [];
+    pool = good;
+  }
+
   const picked = pool.slice(0, n);
   picked.forEach(p => { if(!state.seenNames.includes(p.name)) state.seenNames.push(p.name); });
   return picked;
@@ -1182,10 +1572,12 @@ async function computeMatches(state){
     adventure: state.adventure
   });
 
+  const userProfile = buildUserProfile(state);
+  let candidates = applyHardFilters(places, userProfile);
+
   // Vid reglagets ändlägen filtrerar vi strikt på prisnivå istället för att
   // bara vikta den i poängen — annars skulle "över 2000 kr" ändå kunna visa
   // billiga ställen bara för att fylla ut till tre kort.
-  let candidates = filterExcluded(places);
   if(isOpenEndedLow(state.budgetAmount)){
     candidates = candidates.filter(p => p.price === 1);
   } else if(isOpenEndedHigh(state.budgetAmount)){
@@ -1193,10 +1585,10 @@ async function computeMatches(state){
   }
 
   const sorted = candidates
-    .map(p => ({ ...p, score: scoreWithVibe(p, state) }))
+    .map(p => scoreCandidate(p, userProfile))
     .sort(compareByOpenThenScore);
 
-  return pickUnseen(sorted, state);
+  return selectTopMatches(sorted, state);
 }
 
 /* =========================================================================
@@ -1214,7 +1606,7 @@ const state = {
   showExcluded: false,
   // Steg 4 · Vibe: antingen en förvald preset ("preset") eller en egen
   // text som tolkats av analyzeVibeText() ("custom"). vibeTags används av
-  // scoreWithVibe()/tagBonus() för att vikta matchningarna.
+  // Matching Engine (buildUserProfile/CONTEXT_WEIGHTS) för att vikta matchningarna.
   vibeSource: null, vibeId: null, vibeLabel: '', vibeTags: [], customVibeText: '',
   // Namn på ställen som redan visats i det här sökpasset — används av
   // "Sök igen" så en omsökning med samma svar ger NYA alternativ istället
@@ -1683,9 +2075,7 @@ updateFavCount();
 /* =========================================================================
    JURIDISKT: villkor, integritetspolicy, cookies/lagring, kontakt
    matchymatchy körs helt i webbläsaren (ingen egen server som lagrar
-   personuppgifter) — texterna nedan speglar det ärligt. VIKTIGT: fält
-   inom [hakparenteser] är platshållare som måste bytas ut mot riktiga
-   uppgifter (t.ex. e-postadress) innan sajten görs publik på riktigt.
+   personuppgifter) — texterna nedan speglar det ärligt.
    ========================================================================= */
 const LEGAL_LAST_UPDATED = "7 september 2026";
 
@@ -1714,7 +2104,7 @@ const LEGAL_CONTENT = {
     title: "Integritetspolicy",
     body: `
       <h3>Vem är ansvarig</h3>
-      <p>Sevela ansvarar för matchymatchy och behandlingen som beskrivs här. Kontakta oss via [e-postadress] vid frågor.</p>
+      <p>Sevela ansvarar för matchymatchy och behandlingen som beskrivs här. Kontakta oss via matchymatchy.com@gmail.com vid frågor.</p>
       <h3>Detta samlar vi in — och detta gör vi inte</h3>
       <ul>
         <li><strong>Din plats:</strong> endast om du aktivt väljer att dela den (via webbläsarens platsbehörighet eller genom att skriva in en adress). Koordinaterna skickas till Google för att hitta restauranger nära dig, men lagras aldrig av oss — matchymatchy har ingen egen server som sparar besökardata.</li>
@@ -1726,7 +2116,7 @@ const LEGAL_CONTENT = {
       <h3>Rättslig grund</h3>
       <p>Behandlingen av din plats sker med stöd av ditt samtycke — du väljer själv om och när du delar den, varje gång du använder tjänsten.</p>
       <h3>Dina rättigheter</h3>
-      <p>Eftersom vi inte lagrar personuppgifter på någon server finns det inget register hos oss att begära ut eller rätta. Du kan när som helst radera lokalt sparade favoriter genom att rensa webbläsarens data för sajten, eller via papperskorgen i favoritlistan. Vid frågor är du välkommen att höra av dig till [e-postadress].</p>
+      <p>Eftersom vi inte lagrar personuppgifter på någon server finns det inget register hos oss att begära ut eller rätta. Du kan när som helst radera lokalt sparade favoriter genom att rensa webbläsarens data för sajten, eller via papperskorgen i favoritlistan. Vid frågor är du välkommen att höra av dig till matchymatchy.com@gmail.com.</p>
       <h3>Ändringar</h3>
       <p>Vi kan uppdatera denna policy om tjänsten förändras. Datumet nedan visar senaste uppdatering.</p>
       <div class="legal-updated">Senast uppdaterad: ${LEGAL_LAST_UPDATED}</div>
@@ -1757,7 +2147,7 @@ const LEGAL_CONTENT = {
     body: `
       <h3>Hör av dig</h3>
       <p>Frågor, feedback eller något som inte stämmer i ett förslag? Skicka gärna ett mejl.</p>
-      <p>E-post: <a href="mailto:[e-postadress]">[e-postadress]</a></p>
+      <p>E-post: <a href="mailto:matchymatchy.com@gmail.com">matchymatchy.com@gmail.com</a></p>
       <p>matchymatchy drivs av Sevela, [Stockholm], Sverige.</p>
     `
   }
@@ -1820,8 +2210,7 @@ const MODES = [
   { id:'now',         label:'Nu' },
   { id:'tonight',      label:'Ikväll' },
   { id:'spontaneous', label:'Spontant' },
-  { id:'group',       label:'Med vänner' },
-  { id:'date',        label:'Dejt' }
+  { id:'group',       label:'Med vänner' }
 ];
 
 // Varje läge har sina egna quiz-steg, sin egen matchningsfunktion och sitt
@@ -2328,12 +2717,11 @@ function renderRadius(){
    Ersätter det gamla "äventyrsreglaget" med ett val av sällskapets vibe:
    antingen en av några färdiga stämningar, eller en egen text som tolkas
    lokalt (analyzeVibeText) till samma taggar/äventyrsnivå som resten av
-   matchningslogiken redan förstår sig på. Ingen extern AI-tjänst anropas
+   Matching Engine redan förstår sig på. Ingen extern AI-tjänst anropas
    här (appen har ingen backend att göra det ifrån) — "analysen" är en
-   nyckelordsbaserad tolkning byggd på samma tagg-vokabulär som redan
-   används för Dejt-läget (DATE_BONUS_TAGS). Om ni
+   nyckelordsbaserad tolkning. Om ni
    senare vill koppla på en riktig språkmodell för tolkningen är det bara
-   analyzeVibeText() som behöver bytas ut — allt annat (scoreWithVibe,
+   analyzeVibeText() som behöver bytas ut — allt annat (buildUserProfile,
    reasonFor, UI) bygger redan på taggarna den returnerar.
    ========================================================================= */
 const VIBE_PRESETS = [
@@ -2791,12 +3179,16 @@ async function computeEveningPlan(state){
   const raw = await PlacesProvider.getPlaces({
     coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
   });
-  const places = filterExcluded(raw);
+  const userProfile = buildUserProfile(state);
+  const places = applyHardFilters(raw, userProfile);
   const usedInPlan = new Set();
   const bestInSlot = (slot) => {
     const sorted = places
       .filter(p => !usedInPlan.has(p.name))
-      .map(p => ({ ...p, score: scoreWithVibe(p, state) + slotBonus(p, slot) }))
+      .map(p => {
+        const scored = scoreCandidate(p, userProfile);
+        return { ...scored, score: scored.score + slotBonus(p, slot) };
+      })
       .sort(compareByOpenThenScore);
     const pick = pickUnseen(sorted, state, 1)[0] || sorted[0] || null;
     if(pick) usedInPlan.add(pick.name);
@@ -2899,21 +3291,14 @@ function renderEveningPlan(plan){
 
 /* =========================================================================
    LÄGE: DEJT
-   Samma quiz som "Nu" (location, budget, radie, äventyr), men matchningen
-   viktar upp romantiska/mysiga taggar utöver den vanliga poängen.
+   Borttaget från huvudmenyn (se MODES), men flödet/matchningen lämnas
+   intakt ifall det återinförs senare. Samma quiz som "Nu" — CONTEXT_WEIGHTS.date
+   (mer vikt på atmosfär/sammanhang) och romantik-boosten i buildUserProfile()
+   när context==='date' sköter numera viktningen istället för en separat
+   hårdkodad tagglista.
    ========================================================================= */
-const DATE_BONUS_TAGS = ["Romantiskt", "Mysigt", "Datevänligt", "Utsikt"];
-
 async function computeDateMatches(state){
-  const raw = await PlacesProvider.getPlaces({
-    coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
-  });
-  const places = filterExcluded(raw);
-  const bonusTags = [...DATE_BONUS_TAGS, ...(state.vibeTags || [])];
-  const sorted = places
-    .map(p => ({ ...p, score: scorePlace(p, state) * 0.75 + tagBonus(p, bonusTags) * 0.25 }))
-    .sort(compareByOpenThenScore);
-  return pickUnseen(sorted, state);
+  return computeMatches(state);
 }
 
 /* =========================================================================
