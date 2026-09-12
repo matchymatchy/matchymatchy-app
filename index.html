@@ -562,9 +562,12 @@ const FIREBASE_ENABLED = !!CONFIG.FIREBASE.apiKey;
    PLACES PROVIDER
    Ett enda ställe som levererar platser till appen. Idag returnerar den
    fejkad data. Bytpunkten till Google Places API (New) är fetchLive().
-   Formen på varje plats-objekt {name, type, price, dist, adv, tags, trait,
-   lat, lng} är kontraktet resten av appen bygger på — håll live-datan i
-   samma form så inget annat behöver ändras.
+   Formen på varje plats-objekt {name, type, price, priceKnown, dist, adv,
+   tags, trait, lat, lng} är kontraktet resten av appen bygger på — håll
+   live-datan i samma form så inget annat behöver ändras. priceKnown är
+   false bara för riktiga Google-träffar utan verifierad priceLevel; mock-
+   /gruppdata saknar fältet helt och tolkas därför som känt (se
+   buildRestaurantProfile).
    ========================================================================= */
 const PlacesProvider = (() => {
 
@@ -591,9 +594,101 @@ const PlacesProvider = (() => {
     return MOCK_PLACES;
   }
 
+  // Radie under den här gränsen täcks tillräckligt bra av EN cirkelsökning
+  // — rutnätet nedan aktiveras bara när det faktiskt behövs, för att hålla
+  // API-anropen (och kostnaden) nere.
+  const GRID_SPLIT_RADIUS_KM = 2;
+
+  // En enda searchNearby-sökning med stor radie missgynnar systematiskt
+  // användarens EGET närområde: Google fyller sina (max 20) resultatplatser
+  // med de mest relevanta/populära träffarna i HELA cirkeln. I praktiken
+  // blir det ofta en tät, populär stadsdel (t.ex. Södermalm i Stockholm)
+  // — även när användaren står långt därifrån (t.ex. Täby) med en stor
+  // vald radie, eftersom den enda sökpunkten ligger mitt i användarens
+  // ände av cirkeln men Googles 20 träffar ändå domineras av den tätaste
+  // delen av HELA cirkeln. Detta är INGEN hårdkodad Södermalm-regel någon
+  // annanstans i koden — det är en strukturell konsekvens av att bara
+  // fråga en gång. Lösningen: sök av HELA det valda området med flera
+  // överlappande cirklar (en central + en ring runt om), deduplicera på
+  // placeId, och filtrera sedan exakt på riktigt avstånd (Haversine mot
+  // användarens FAKTISKA koordinater, inte gridpunkten) i applyHardFilters.
+  function buildSearchGrid(center, radiusKm){
+    if(radiusKm <= GRID_SPLIT_RADIUS_KM){
+      return [{ lat: center.lat, lng: center.lng, radiusM: radiusKm * 1000 }];
+    }
+    // 1 central punkt + 6 punkter i en ring (60° mellanrum). Varje punkts
+    // egen sökradie (62% av vald radie) överlappar både grannpunkterna i
+    // ringen och centrumpunkten, så det inte uppstår några otäckta luckor
+    // mellan sökcirklarna.
+    const subRadiusKm = radiusKm * 0.62;
+    const ringDistanceKm = radiusKm * 0.55;
+    const points = [{ lat: center.lat, lng: center.lng, radiusM: subRadiusKm * 1000 }];
+    for(let i = 0; i < 6; i++){
+      const angle = (Math.PI / 3) * i;
+      const dLat = (ringDistanceKm / 111.32) * Math.cos(angle);
+      const dLng = (ringDistanceKm / (111.32 * Math.cos(center.lat * Math.PI / 180))) * Math.sin(angle);
+      points.push({ lat: center.lat + dLat, lng: center.lng + dLng, radiusM: subRadiusKm * 1000 });
+    }
+    return points;
+  }
+
+  // "includedTypes" matchar mot HELA platsens typ-lista, vilket är varför
+  // t.ex. en saluhall (en marknad som har "restaurant" som en av flera
+  // taggar, inte sin faktiska huvudkategori) kunde smyga sig in som
+  // förslag. "includedPrimaryTypes" matchar bara mot platsens FAKTISKA
+  // huvudkategori och är betydligt mer träffsäkert.
+  const INCLUDED_PRIMARY_TYPES = ["restaurant", "bar", "cafe"];
+  // Snabbmat, matbutiker, boenden och bensinmackar klassas av Google som
+  // egna primärtyper — utesluts helt här så de aldrig kan dyka upp som
+  // förslag, oavsett vad poängsättningen längre ner skulle landa i.
+  const EXCLUDED_PRIMARY_TYPES = [
+    "fast_food_restaurant", "meal_takeaway", "meal_delivery",
+    "sandwich_shop", "food_court", "deli",
+    "lodging", "hostel", "hotel", "motel", "resort_hotel", "campground", "rv_park",
+    "gas_station", "convenience_store", "supermarket", "grocery_store",
+    "department_store", "shopping_mall", "market"
+  ];
+
+  // Ett enda searchNearby-anrop mot en sökpunkt i gridet. Returnerar de rå
+  // Google-objekten (odedupade, omappade) — sammanslagning/deduplicering
+  // sköts av fetchLive() efter att alla gridpunkter svarat.
+  async function searchNearbyOnce(point){
+    const body = {
+      includedPrimaryTypes: INCLUDED_PRIMARY_TYPES,
+      excludedPrimaryTypes: EXCLUDED_PRIMARY_TYPES,
+      maxResultCount: 20,
+      languageCode: "sv",
+      locationRestriction: {
+        circle: {
+          center: { latitude: point.lat, longitude: point.lng },
+          radius: point.radiusM
+        }
+      }
+    };
+    const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": CONFIG.GOOGLE_MAPS_API_KEY,
+        // FieldMask styr vad ni betalar för — håll den snäv. Samma fältmask
+        // återanvänds för varje gridpunkt.
+        // OBS: "places.types" är en oordnad lista — det är INTE samma sak
+        // som platsens huvudkategori. Vi hämtar "primaryType" separat
+        // eftersom det är fältet Google faktiskt avsett för kategorisering
+        // (se kommentar vid tidigare bugg i guessSlot/capitalizeType nedan).
+        // "currentOpeningHours" ger öppet/stängt just nu (tar hänsyn till
+        // tillfälliga avvikelser, t.ex. helgdagar) — "regularOpeningHours"
+        // ger den vanliga veckoscheman-texten att visa i listan.
+        "X-Goog-FieldMask": "places.id,places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount,places.editorialSummary,places.outdoorSeating,places.goodForGroups,places.servesVegetarianFood,places.servesBeer,places.servesWine,places.servesCocktails,places.currentOpeningHours,places.regularOpeningHours"
+      },
+      body: JSON.stringify(body)
+    });
+    if(!res.ok) throw new Error("Places API-anrop misslyckades: " + res.status);
+    const data = await res.json();
+    return data.places || [];
+  }
+
   // Byt ut mot riktiga anrop när CONFIG.USE_LIVE_DATA = true.
-  // Nedan är den faktiska formen på ett Places API (New) Nearby Search-
-  // anrop, redo att aktiveras — kommenterad ut tills en nyckel finns på plats.
   async function fetchLive(criteria){
     if(!CONFIG.GOOGLE_MAPS_API_KEY){
       console.warn("matchymatchy: GOOGLE_MAPS_API_KEY saknas, faller tillbaka på fejkad data.");
@@ -610,56 +705,30 @@ const PlacesProvider = (() => {
       return fetchMock(criteria);
     }
 
-    const body = {
-      // "includedTypes" matchar mot HELA platsens typ-lista, vilket är
-      // varför t.ex. en saluhall (en marknad som har "restaurant" som en
-      // av flera taggar, inte sin faktiska huvudkategori) kunde smyga sig
-      // in som förslag. "includedPrimaryTypes" matchar bara mot platsens
-      // FAKTISKA huvudkategori och är betydligt mer träffsäkert.
-      includedPrimaryTypes: ["restaurant", "bar", "cafe"],
-      // Snabbmat, matbutiker, boenden och bensinmackar klassas av Google
-      // som egna primärtyper — utesluts helt här så de aldrig kan dyka upp
-      // som förslag, oavsett vad poängsättningen längre ner skulle landa i.
-      excludedPrimaryTypes: [
-        "fast_food_restaurant", "meal_takeaway", "meal_delivery",
-        "sandwich_shop", "food_court", "deli",
-        "lodging", "hostel", "hotel", "motel", "resort_hotel", "campground", "rv_park",
-        "gas_station", "convenience_store", "supermarket", "grocery_store",
-        "department_store", "shopping_mall", "market"
-      ],
-      maxResultCount: 20,
-      languageCode: "sv",
-      locationRestriction: {
-        circle: {
-          center: { latitude: criteria.coords.lat, longitude: criteria.coords.lng },
-          radius: criteria.radiusKm * 1000
-        }
-      }
-    };
+    const gridPoints = buildSearchGrid(criteria.coords, criteria.radiusKm);
+    const settled = await Promise.allSettled(gridPoints.map(pt => searchNearbyOnce(pt)));
 
-    const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": CONFIG.GOOGLE_MAPS_API_KEY,
-        // FieldMask styr vad ni betalar för — håll den snäv.
-        // OBS: "places.types" är en oordnad lista — det är INTE samma sak
-        // som platsens huvudkategori. Vi hämtar "primaryType" separat
-        // eftersom det är fältet Google faktiskt avsett för kategorisering
-        // (se kommentar vid tidigare bugg i guessSlot/capitalizeType nedan).
-        // "currentOpeningHours" ger öppet/stängt just nu (tar hänsyn till
-        // tillfälliga avvikelser, t.ex. helgdagar) — "regularOpeningHours"
-        // ger den vanliga veckoscheman-texten att visa i listan.
-        "X-Goog-FieldMask": "places.id,places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount,places.editorialSummary,places.outdoorSeating,places.goodForGroups,places.servesVegetarianFood,places.servesBeer,places.servesWine,places.servesCocktails,places.currentOpeningHours,places.regularOpeningHours"
-      },
-      body: JSON.stringify(body)
+    const failed = settled.filter(r => r.status === "rejected");
+    if(failed.length){
+      console.warn(`matchymatchy: ${failed.length}/${gridPoints.length} rutnätssökningar mot Places API misslyckades`, failed.map(f => f.reason));
+    }
+    if(failed.length === settled.length){
+      // Samtliga sökpunkter misslyckades — inget att visa, låt anroparen
+      // hantera det precis som ett enskilt misslyckat anrop tidigare gjorde.
+      throw new Error("Places API-anrop misslyckades: samtliga sökpunkter gav fel");
+    }
+
+    // Deduplicera på placeId INNAN mappning/poängsättning — annars skulle
+    // samma restaurang kunna räknas flera gånger bara för att den låg inom
+    // flera överlappande sökcirklar i gridet.
+    const byPlaceId = new Map();
+    settled.forEach(r => {
+      if(r.status !== "fulfilled") return;
+      r.value.forEach(p => { if(p.id && !byPlaceId.has(p.id)) byPlaceId.set(p.id, p); });
     });
 
-    if(!res.ok) throw new Error("Places API-anrop misslyckades: " + res.status);
-    const data = await res.json();
-
     // Mappa Google-formatet till appens interna plats-form.
-    return (data.places || [])
+    return Array.from(byPlaceId.values())
       .filter(p => !isWrongCategory(p))
       .map(p => {
       // primaryType/primaryTypeDisplayName är Googles egna, avsedda fält för
@@ -678,6 +747,11 @@ const PlacesProvider = (() => {
         name: p.displayName?.text || "Okänd restaurang",
         type: typeLabel,
         price: mapGooglePriceLevel(p.priceLevel),
+        // true bara om Google faktiskt gav en priceLevel vi kan lita på.
+        // Används av applyHardFilters/matchRestaurant/reasonFor för att
+        // ALDRIG påstå en budgetmatchning (eller ett hårt avslag) på en
+        // gissning — se problem 1/2 i kravspecen.
+        priceKnown: isKnownGooglePriceLevel(p.priceLevel),
         dist: haversineKm(criteria.coords, { lat: p.location.latitude, lng: p.location.longitude }),
         // Google ger ingen "äventyrsnivå" för riktiga sökresultat. Tidigare
         // stod det en HÅRDKODAD adv:3 här för ALLA live-träffar, som om det
@@ -767,12 +841,25 @@ const PlacesProvider = (() => {
     return KNOWN_CHAIN_NAME_PATTERNS.some(re => re.test(name));
   }
 
+  // Fyra egna nivåer, en per Google-nivå — ingen ihopslagning längre.
+  // Tidigare hamnade "dyrt" och "väldigt dyrt" i samma bucket (3), vilket
+  // gjorde att budgetreglaget inte gick att lita på i den övre delen.
+  const GOOGLE_PRICE_LEVEL_MAP = { PRICE_LEVEL_FREE:1, PRICE_LEVEL_INEXPENSIVE:1, PRICE_LEVEL_MODERATE:2, PRICE_LEVEL_EXPENSIVE:3, PRICE_LEVEL_VERY_EXPENSIVE:4 };
+
   function mapGooglePriceLevel(level){
-    // Fyra egna nivåer, en per Google-nivå — ingen ihopslagning längre.
-    // Tidigare hamnade "dyrt" och "väldigt dyrt" i samma bucket (3), vilket
-    // gjorde att budgetreglaget inte gick att lita på i den övre delen.
-    const map = { PRICE_LEVEL_FREE:1, PRICE_LEVEL_INEXPENSIVE:1, PRICE_LEVEL_MODERATE:2, PRICE_LEVEL_EXPENSIVE:3, PRICE_LEVEL_VERY_EXPENSIVE:4 };
-    return map[level] || 2;
+    // OBS: fallback till 2 här är bara för att alltid ha ett NUMERISKT värde
+    // att räkna med (t.ex. sortering) — den får ALDRIG tolkas som en
+    // bekräftad "måttlig" prisnivå. Använd isKnownGooglePriceLevel() för att
+    // veta om priset faktiskt är verifierat av Google innan det används i
+    // en budgetjämförelse eller beskrivning (se priceKnown-fältet nedan).
+    return GOOGLE_PRICE_LEVEL_MAP[level] || 2;
+  }
+
+  // true bara om Google faktiskt returnerat en av sina kända prisnivåer.
+  // Många restauranger saknar priceLevel helt — det ska aldrig tolkas som
+  // "måttligt pris" (se mapGooglePriceLevel-kommentaren).
+  function isKnownGooglePriceLevel(level){
+    return Object.prototype.hasOwnProperty.call(GOOGLE_PRICE_LEVEL_MAP, level);
   }
 
   function capitalizeType(type){
@@ -1100,6 +1187,11 @@ function buildRestaurantProfile(p){
     conversation,
     suitableFor,
     priceLevel: p.price,
+    // Mock-/gruppdata har alltid ett handplockat pris (ingen okänd-status
+    // finns i den formen), så priceKnown defaultar till true om fältet
+    // saknas — bara riktiga Google-träffar utan priceLevel sätter det
+    // uttryckligen till false (se fetchLive).
+    priceKnown: p.priceKnown !== false,
     rating: typeof p.rating === "number" ? p.rating : null,
     reviewCount: p.reviews || 0,
     capabilities: {
@@ -1120,14 +1212,21 @@ function buildRestaurantProfile(p){
 function applyHardFilters(rawPlaces, userProfile){
   let out = filterExcluded(rawPlaces); // "Inte för mig" — permanent, alltid hårt
 
-  // Strikt fel budget: 3 nivåer ifrån av 4 (t.ex. "€" mot "€€€€"). Allt
-  // inom det spannet hanteras av den mjuka budget-poängen i matchRestaurant.
-  out = out.filter(p => Math.abs(p.price - userProfile.pricePreference) < 3);
+  // Vald prisnivå ska följas STRIKT: budgetnivåerna är fyra icke-
+  // överlappande spann (0–100/100–200/200–400/över 400 kr), inte ett
+  // "upp till"-reglage, så en riktig matchning är samma nivå (diff===0) —
+  // inte "någorlunda nära". Filtret gäller bara ställen med en VERIFIERAD
+  // priceLevel (p.priceKnown): ett ställe utan känd prisnivå kan varken
+  // bekräftas matcha eller inte matcha, så det utesluts inte här på en
+  // gissning — det beskrivs bara neutralt istället (se reasonFor()).
+  out = out.filter(p => !p.priceKnown || p.price === userProfile.pricePreference);
 
-  // För långt bort: den mjuka distansavtoningen sköter allt nära vald
-  // radie — det här är bara skyddet mot uppenbart orimligt avstånd.
-  const maxDist = userProfile.distancePreference * 2 + 3;
-  out = out.filter(p => p.dist <= maxDist);
+  // Hela vald radie ska sökas (se buildSearchGrid i PlacesProvider), och
+  // resultat UTANFÖR den ska aldrig visas. Därför en hård gräns vid den
+  // faktiska radien (ett litet epsilon för flyttalsavrundning i Haversine/
+  // gridsökningen) — inte den tidigare lösa "dubbla radien plus 3 km"-
+  // gränsen, som kunde släppa igenom ställen långt utanför vald sträcka.
+  out = out.filter(p => p.dist <= userProfile.distancePreference + 0.05);
 
   return out;
 }
@@ -1174,7 +1273,13 @@ function contextMatchScore(restaurant, userProfile){
 function matchRestaurant(restaurant, userProfile){
   const weights = CONTEXT_WEIGHTS[userProfile.context] || CONTEXT_WEIGHTS.general;
 
-  const priceScore = clamp01(1 - Math.abs(restaurant.priceLevel - userProfile.pricePreference) / 3);
+  // Okänd prisnivå ska varken belönas eller straffas — den hårda budget-
+  // filtreringen i applyHardFilters släpper redan bara igenom verifierade
+  // prisnivåer som faktiskt matchar, så det här är främst relevant för
+  // ställen utan priceLevel (som inte utesluts på gissning).
+  const priceScore = restaurant.priceKnown === false
+    ? 0.5
+    : clamp01(1 - Math.abs(restaurant.priceLevel - userProfile.pricePreference) / 3);
   const distScore = restaurant.location.distance <= userProfile.distancePreference
     ? 1
     : clamp01(1 - ((restaurant.location.distance - userProfile.distancePreference) / 3));
@@ -1507,7 +1612,19 @@ function favoriteAffinityScore(p, weights){
 
 function reasonFor(p, state){
   const parts = [];
-  parts.push(Math.abs(p.price-state.budget)===0 ? "träffar er budget rakt av" : "ligger nära er budget");
+  // Påstå ALDRIG en budgetmatchning på ett ställe vars prisnivå Google
+  // inte gett oss (p.priceKnown===false) — se problem 1/4 i kravspecen.
+  // Skriv neutralt istället för att gissa. Om priset ÄR verifierat har
+  // applyHardFilters redan sett till att bara exakta budgetträffar (diff
+  // 0) tar sig hit, men vi beskriver ändå ärligt om en kandidat någon
+  // gång skulle nå hit på annat sätt (t.ex. framtida anropskod).
+  if(p.priceKnown === false){
+    parts.push("prisnivå inte bekräftad av Google");
+  } else if(Math.abs(p.price - state.budget) === 0){
+    parts.push("ligger i er valda prisnivå");
+  } else {
+    parts.push("ligger nära er budget, men inte exakt i den");
+  }
   parts.push(p.dist<=state.radius ? `bara ${p.dist.toFixed(1)} km bort` : `${p.dist.toFixed(1)} km bort, strax utanför er radie`);
   parts.push(vibeDescriptor(p));
   const traitPart = p.trait ? (p.traitStandalone ? ` ${p.trait}` : ` Känt för ${p.trait}.`) : "";
@@ -3002,7 +3119,7 @@ function renderResults(matches){
         </div>
       </div>
       <div class="result-why">${reasonFor(p, state)}</div>
-      <div class="chips">${p.tags.map((t,i) => `<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
+      <div class="chips">${p.tags.map(t => `<span class="chip">${t}</span>`).join('')}</div>
       ${ratingRow(p)}
       ${hoursBlockHtml(p)}
       <button type="button" class="maps-hint" aria-label="Öppna ${p.name} i Google Maps">📍 Öppna i Google Maps ↗</button>
@@ -3250,7 +3367,7 @@ function renderEveningPlan(plan){
           </div>
         </div>
         <div class="result-why">${reasonFor(p, state)}</div>
-        <div class="chips">${p.tags.map((t,i)=>`<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
+        <div class="chips">${p.tags.map(t => `<span class="chip">${t}</span>`).join('')}</div>
         ${ratingRow(p)}
         ${hoursBlockHtml(p)}
         <button type="button" class="maps-hint" aria-label="Öppna ${p.name} i Google Maps">📍 Öppna i Google Maps ↗</button>
