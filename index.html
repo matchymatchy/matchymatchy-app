@@ -1212,14 +1212,15 @@ function buildRestaurantProfile(p){
 function applyHardFilters(rawPlaces, userProfile){
   let out = filterExcluded(rawPlaces); // "Inte för mig" — permanent, alltid hårt
 
-  // Vald prisnivå ska följas STRIKT: budgetnivåerna är fyra icke-
-  // överlappande spann (0–100/100–200/200–400/över 400 kr), inte ett
-  // "upp till"-reglage, så en riktig matchning är samma nivå (diff===0) —
-  // inte "någorlunda nära". Filtret gäller bara ställen med en VERIFIERAD
-  // priceLevel (p.priceKnown): ett ställe utan känd prisnivå kan varken
-  // bekräftas matcha eller inte matcha, så det utesluts inte här på en
-  // gissning — det beskrivs bara neutralt istället (se reasonFor()).
-  out = out.filter(p => !p.priceKnown || p.price === userProfile.pricePreference);
+  // Vald prisnivå ska följas TYDLIGT, men det avgörs numera av en egen
+  // prioritetsnivå i sorteringen (se priceTier i scoreCandidate/
+  // compareByOpenThenScore) snarare än ett hårt filter här. Ett ställe med
+  // en VERIFIERAD prisnivå som inte matchar exakt är fortfarande ett giltigt
+  // (men lägst prioriterat) reservalternativ — bara om det inte finns
+  // tillräckligt många bättre matchningar (se kravspecen, punkt 2.3). Ett
+  // hårt filter här skulle permanent utesluta det scenariot helt.
+  // Obekräftad prisnivå (p.priceKnown===false) filtreras aldrig bort här av
+  // samma skäl som förut: den kan varken bekräftas matcha eller inte matcha.
 
   // Hela vald radie ska sökas (se buildSearchGrid i PlacesProvider), och
   // resultat UTANFÖR den ska aldrig visas. Därför en hård gräns vid den
@@ -1273,10 +1274,12 @@ function contextMatchScore(restaurant, userProfile){
 function matchRestaurant(restaurant, userProfile){
   const weights = CONTEXT_WEIGHTS[userProfile.context] || CONTEXT_WEIGHTS.general;
 
-  // Okänd prisnivå ska varken belönas eller straffas — den hårda budget-
-  // filtreringen i applyHardFilters släpper redan bara igenom verifierade
-  // prisnivåer som faktiskt matchar, så det här är främst relevant för
-  // ställen utan priceLevel (som inte utesluts på gissning).
+  // Okänd prisnivå ska varken belönas eller straffas (0.5, neutralt). Ett
+  // bekräftat pris poängsätts efter hur nära det ligger vald budget — men
+  // den STRUKTURELLA prioriteten (matchande pris > obekräftat > icke-
+  // matchande) avgörs numera av priceTier i scoreCandidate/
+  // compareByOpenThenScore, inte av att applyHardFilters utesluter
+  // mismatchar helt (den gör den inte längre, se problem 1/2 i kravspecen).
   const priceScore = restaurant.priceKnown === false
     ? 0.5
     : clamp01(1 - Math.abs(restaurant.priceLevel - userProfile.pricePreference) / 3);
@@ -1369,6 +1372,17 @@ function scoreCandidate(rawPlace, userProfile){
   if(rawPlace.isChain) score *= 0.45;
   score = clamp01(score);
 
+  // Prisprioritet — se problem 1/2 i kravspecen: ett bekräftat pris som
+  // matchar budgeten ska ALLTID rankas före ett obekräftat pris, som i sin
+  // tur ALLTID ska rankas före ett bekräftat pris som INTE matchar. Det här
+  // är en STRUKTURELL prioritet (används av compareByOpenThenScore som ett
+  // eget sorteringssteg, likt öppet/stängt), inte bara en viktad poäng som
+  // andra faktorer (betyg, atmosfär) skulle kunna överrösta.
+  //   0 = bekräftad prisnivå som matchar vald budget exakt
+  //   1 = obekräftad prisnivå (varken bekräftat matchande eller ej — fallback)
+  //   2 = bekräftad prisnivå som INTE matchar (sista utväg)
+  const priceTier = !profile.priceKnown ? 1 : (profile.priceLevel === userProfile.pricePreference ? 0 : 2);
+
   const pct100 = (n) => Math.round(clamp01(n) * 100);
   const diagnostics = buildDiagnostics(profile, breakdown, weights);
 
@@ -1376,6 +1390,7 @@ function scoreCandidate(rawPlace, userProfile){
     console.log(`%c${rawPlace.name} → ${pct100(score)}%`, "font-weight:bold", {
       venueCategory: profile.venueCategory,
       intent: userProfile.intent,
+      priceTier,
       breakdown: Object.fromEntries(Object.entries(breakdown).map(([k,v]) => [k, pct100(v)])),
       weights,
       evidence: diagnostics.evidence,
@@ -1386,6 +1401,7 @@ function scoreCandidate(rawPlace, userProfile){
   return {
     ...rawPlace,
     score,
+    priceTier,
     matchScore: {
       totalScore: pct100(score),
       breakdown: {
@@ -1406,10 +1422,17 @@ function scoreCandidate(rawPlace, userProfile){
 // Öppna ställen (openNow===true ELLER null/okänt) ska ALLTID rankas före
 // stängda (openNow===false) — oavsett poäng. Bara om det inte finns några
 // öppna alls faller listan tillbaka på stängda ställen.
+// Näst efter det: priceTier (se scoreCandidate) — ett bekräftat, matchande
+// pris rankas alltid före ett obekräftat pris, som i sin tur alltid
+// rankas före ett bekräftat men icke-matchande pris. Bara inom SAMMA
+// öppet/stängt- och pris-nivå avgör den vanliga poängen ordningen.
 function compareByOpenThenScore(a, b){
   const aClosed = a.openNow === false;
   const bClosed = b.openNow === false;
   if(aClosed !== bClosed) return aClosed ? 1 : -1;
+  const aTier = a.priceTier ?? 1;
+  const bTier = b.priceTier ?? 1;
+  if(aTier !== bTier) return aTier - bTier;
   return b.score - a.score;
 }
 
@@ -1614,10 +1637,10 @@ function reasonFor(p, state){
   const parts = [];
   // Påstå ALDRIG en budgetmatchning på ett ställe vars prisnivå Google
   // inte gett oss (p.priceKnown===false) — se problem 1/4 i kravspecen.
-  // Skriv neutralt istället för att gissa. Om priset ÄR verifierat har
-  // applyHardFilters redan sett till att bara exakta budgetträffar (diff
-  // 0) tar sig hit, men vi beskriver ändå ärligt om en kandidat någon
-  // gång skulle nå hit på annat sätt (t.ex. framtida anropskod).
+  // Skriv neutralt istället för att gissa. Ett bekräftat men icke-
+  // matchande pris kan numera visas som sista utväg (se priceTier i
+  // scoreCandidate) — då beskrivs det ärligt som "nära men inte exakt"
+  // istället för att påstås matcha.
   if(p.priceKnown === false){
     parts.push("prisnivå inte bekräftad av Google");
   } else if(Math.abs(p.price - state.budget) === 0){
@@ -1625,7 +1648,7 @@ function reasonFor(p, state){
   } else {
     parts.push("ligger nära er budget, men inte exakt i den");
   }
-  parts.push(p.dist<=state.radius ? `bara ${p.dist.toFixed(1)} km bort` : `${p.dist.toFixed(1)} km bort, strax utanför er radie`);
+  parts.push(p.dist<=state.radius ? `${p.dist.toFixed(1)} km bort` : `${p.dist.toFixed(1)} km bort, strax utanför er radie`);
   parts.push(vibeDescriptor(p));
   const traitPart = p.trait ? (p.traitStandalone ? ` ${p.trait}` : ` Känt för ${p.trait}.`) : "";
   const vibeHits = state.vibeTags && state.vibeTags.length ? p.tags.filter(t => state.vibeTags.includes(t)) : [];
