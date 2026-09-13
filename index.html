@@ -945,9 +945,40 @@ const PlacesProvider = (() => {
     return extra.filter(t => !(p.tags || []).includes(t));
   }
 
+  // KOSTNADSOPTIMERING: en sökning med radie > GRID_SPLIT_RADIUS_KM kostar
+  // 7 st searchNearby-anrop (se buildSearchGrid), inte 1. Utan cache
+  // skulle varje tryck på "Sök igen" — eller att bara byta läge (t.ex.
+  // Nu → Dejt) utan att ändra plats/radie — betala för samma dyra
+  // rutnätssökning igen, trots att listan över restauranger i området
+  // rimligen inte hunnit ändras. Cachen återanvänder samma råa Google-
+  // träffar i CACHE_TTL_MS, och all sortering/poängsättning/variation
+  // ("Sök igen" känns ändå nytt tack vare jitter + seenNames-cykling)
+  // görs som vanligt varje gång — bara själva nätverksanropet till Google
+  // hoppas över.
+  const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minuter
+  let cache = null; // { key, places, timestamp }
+
+  function cacheKeyFor(criteria){
+    if(!criteria.coords) return null;
+    // ~11 m precision — små GPS-svängningar mellan sökningar på samma
+    // plats ska fortfarande träffa cachen, men ett faktiskt platsbyte ska
+    // alltid trigga en ny sökning.
+    const lat = criteria.coords.lat.toFixed(4);
+    const lng = criteria.coords.lng.toFixed(4);
+    return `${lat},${lng}|${criteria.radiusKm}`;
+  }
+
   async function getPlaces(criteria){
-    const places = CONFIG.USE_LIVE_DATA ? await fetchLive(criteria) : await fetchMock(criteria);
-    return places.map(p => ({ ...p, tags: [...(p.tags || []), ...deriveCapabilityTags(p)] }));
+    const key = cacheKeyFor(criteria);
+    const now = Date.now();
+    let raw;
+    if(key && cache && cache.key === key && (now - cache.timestamp) < CACHE_TTL_MS){
+      raw = cache.places;
+    } else {
+      raw = CONFIG.USE_LIVE_DATA ? await fetchLive(criteria) : await fetchMock(criteria);
+      if(key) cache = { key, places: raw, timestamp: now };
+    }
+    return raw.map(p => ({ ...p, tags: [...(p.tags || []), ...deriveCapabilityTags(p)] }));
   }
 
   return { getPlaces };
