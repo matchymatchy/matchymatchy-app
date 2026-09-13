@@ -1773,7 +1773,10 @@ const state = {
   groupSize: 0,
   showFavorites: false,
   showAccount: false,
-  showExcluded: false,
+  // Vilken flik som är aktiv i den kombinerade "Gillade | Uteslutna"-vyn
+  // (renderSavedPlaces) — samma vy och samma lagringsmekanism
+  // (localStorage) används oavsett om man är inloggad eller inte.
+  savedTab: 'favorites',
   // Steg 4 · Vibe: antingen en förvald preset ("preset") eller en egen
   // text som tolkats av analyzeVibeText() ("custom"). vibeTags används av
   // Matching Engine (buildUserProfile/CONTEXT_WEIGHTS) för att vikta matchningarna.
@@ -1860,13 +1863,19 @@ function isFavorite(name){ return getFavorites().some(f => f.name === name); }
 function toggleFavorite(place){
   const list = getFavorites();
   const idx = list.findIndex(f => f.name === place.name);
-  if(idx >= 0) list.splice(idx, 1);
-  else list.push({
-    name: place.name, type: place.type, tags: place.tags || [], trait: place.trait || '',
-    lat: typeof place.lat === "number" ? place.lat : null,
-    lng: typeof place.lng === "number" ? place.lng : null,
-    placeId: place.placeId || null
-  });
+  if(idx >= 0){
+    list.splice(idx, 1);
+  } else {
+    list.push({
+      name: place.name, type: place.type, tags: place.tags || [], trait: place.trait || '',
+      lat: typeof place.lat === "number" ? place.lat : null,
+      lng: typeof place.lng === "number" ? place.lng : null,
+      placeId: place.placeId || null
+    });
+    // En restaurang ska aldrig kunna vara både gillad och utesluten
+    // samtidigt — att gilla den tar bort den ur uteslutna-listan.
+    unexcludePlace(place.name);
+  }
   saveFavorites(list);
   return idx < 0; // true om den precis lades till
 }
@@ -1892,11 +1901,19 @@ function saveExcluded(list){
   syncToCloud();
 }
 function isExcludedName(name){ return getExcluded().some(x => x.name === name); }
+// Sparas lokalt (localStorage) precis som favoriter — fungerar identiskt
+// oavsett om man är inloggad eller inte, och synkas till molnet också om
+// man råkar vara inloggad (syncToCloud, via saveExcluded). En restaurang
+// ska aldrig kunna vara både gillad och utesluten samtidigt — att
+// utesluta den tar bort den ur favoritlistan.
 function excludePlace(place){
   if(isExcludedName(place.name)) return;
   const list = getExcluded();
   list.push({ name: place.name, type: place.type || '', excludedAt: new Date().toISOString() });
   saveExcluded(list);
+  if(isFavorite(place.name)){
+    saveFavorites(getFavorites().filter(f => f.name !== place.name));
+  }
 }
 function unexcludePlace(name){
   saveExcluded(getExcluded().filter(x => x.name !== name));
@@ -1964,7 +1981,7 @@ async function handleAuthChange(user){
         if(typeof cloud.prefs.radius === 'number') state.radius = Math.min(20, Math.max(0.5, cloud.prefs.radius));
         if(typeof cloud.prefs.adventure === 'number') state.adventure = cloud.prefs.adventure;
       }
-      if(state.showFavorites) renderFavorites();
+      if(state.showFavorites) renderSavedPlaces();
     } else {
       // Första inloggningen på det här kontot — spara det som redan finns
       // lokalt som en utgångspunkt i molnet.
@@ -2042,17 +2059,6 @@ function formatMemberSince(dateStr){
   }catch(e){ return null; }
 }
 
-function exportUserData(){
-  const data = { favoriter: getFavorites(), uteslutna: getExcluded(), installningar: getPrefs(), exporterad: new Date().toISOString() };
-  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
-  const url = URL.createObjectURL(blob);
-  const a = document.createElement('a');
-  a.href = url;
-  a.download = 'matchymatchy-mina-data.json';
-  a.click();
-  URL.revokeObjectURL(url);
-}
-
 function resetPrefsToDefault(){
   try{ localStorage.removeItem(PREFS_KEY); }catch(e){}
   state.budget = null;
@@ -2117,7 +2123,6 @@ function renderAccount(){
     <div class="account-actions">
       <button class="btn btn-primary" id="viewFavsBtn">Visa sparade restauranger</button>
       <button class="btn btn-ghost" id="viewExcludedBtn">Hantera uteslutna restauranger${excluded.length ? ` (${excluded.length})` : ''}</button>
-      <button class="btn btn-ghost" id="exportDataBtn">Exportera mina data</button>
       <button class="btn btn-ghost" id="resetPrefsBtn">Återställ standardval</button>
       <button class="btn btn-ghost" id="signOutBtn" style="color: var(--danger);">Logga ut</button>
     </div>
@@ -2126,14 +2131,15 @@ function renderAccount(){
   document.getElementById('viewFavsBtn').addEventListener('click', () => {
     state.showAccount = false;
     state.showFavorites = true;
+    state.savedTab = 'favorites';
     render();
   });
   document.getElementById('viewExcludedBtn').addEventListener('click', () => {
     state.showAccount = false;
-    state.showExcluded = true;
+    state.showFavorites = true;
+    state.savedTab = 'excluded';
     render();
   });
-  document.getElementById('exportDataBtn').addEventListener('click', exportUserData);
   document.getElementById('resetPrefsBtn').addEventListener('click', resetPrefsToDefault);
   document.getElementById('signOutBtn').addEventListener('click', () => {
     if(confirm('Logga ut från matchymatchy?')){
@@ -2151,57 +2157,42 @@ function renderAccount(){
   el.card.appendChild(closeBtn);
 }
 
-function renderFavorites(){
+// Gillade och uteslutna restauranger visas nu i SAMMA vy, som två flikar
+// bredvid varandra (återanvänder .mode-tabs/.mode-tab-stilen som redan
+// finns för lägesvalet överst på sidan — ingen ny CSS behövs). Båda
+// listorna lagras på precis samma sätt (localStorage, se FAVORITES_KEY/
+// EXCLUDED_KEY) och fungerar identiskt oavsett om man är inloggad eller
+// inte — vyn nås direkt via hjärt-knappen i toppen, som redan var
+// tillgänglig utan inloggning.
+function renderSavedPlaces(){
   el.modeTabs.style.display = 'none';
   el.steps.style.display = 'none';
   el.dataNote.textContent = '';
   el.card.style.minHeight = 'auto';
-  const favorites = getFavorites();
 
-  if(favorites.length === 0){
-    el.card.innerHTML = `
-      <div class="eyebrow">Favoriter</div>
-      <h1>Inga sparade <em>restauranger än</em></h1>
-      <p class="fav-empty">Tryck på hjärtat på ett förslag för att spara det här.</p>
-    `;
-  } else {
-    el.card.innerHTML = `
-      <div class="eyebrow">Favoriter</div>
-      <h1>Era <em>${favorites.length === 1 ? 'sparade restaurang' : 'sparade restauranger'}</em></h1>
-    `;
-    const frag = document.createDocumentFragment();
-    favorites.forEach(f => {
-      const item = document.createElement('div');
-      item.className = 'fav-list-item clickable';
-      item.tabIndex = 0;
-      item.setAttribute('role', 'button');
-      item.setAttribute('aria-label', `Öppna ${f.name} i Google Maps`);
-      item.innerHTML = `
-        <div><div class="fli-name">${f.name}</div><div class="fli-type">${f.type}</div></div>
-        <button class="fav-btn active" data-remove="${f.name}" aria-label="Ta bort favorit">♥</button>
-      `;
-      const openMaps = () => window.open(mapsUrlFor(f), '_blank', 'noopener');
-      item.addEventListener('click', (e) => {
-        if(e.target.closest('[data-remove]')) return;
-        openMaps();
-      });
-      item.addEventListener('keydown', (e) => {
-        if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-remove]')){
-          e.preventDefault();
-          openMaps();
-        }
-      });
-      frag.appendChild(item);
+  const favorites = getFavorites();
+  const excluded = getExcluded();
+  const tab = state.savedTab === 'excluded' ? 'excluded' : 'favorites';
+
+  el.card.innerHTML = `
+    <div class="eyebrow">Sparade restauranger</div>
+    <div class="mode-tabs" id="savedTabs" style="display:flex;">
+      <button class="mode-tab${tab==='favorites' ? ' active' : ''}" data-tab="favorites" type="button">Gillade${favorites.length ? ` (${favorites.length})` : ''}</button>
+      <button class="mode-tab${tab==='excluded' ? ' active' : ''}" data-tab="excluded" type="button">Uteslutna${excluded.length ? ` (${excluded.length})` : ''}</button>
+    </div>
+    <div id="savedTabBody"></div>
+  `;
+  el.card.querySelectorAll('#savedTabs .mode-tab').forEach(btn => {
+    btn.addEventListener('click', () => {
+      if(btn.dataset.tab === state.savedTab) return;
+      state.savedTab = btn.dataset.tab;
+      renderSavedPlaces();
     });
-    el.card.appendChild(frag);
-    el.card.querySelectorAll('[data-remove]').forEach(btn => {
-      btn.addEventListener('click', (e) => {
-        e.stopPropagation();
-        saveFavorites(getFavorites().filter(f => f.name !== btn.dataset.remove));
-        renderFavorites();
-      });
-    });
-  }
+  });
+
+  const body = document.getElementById('savedTabBody');
+  if(tab === 'favorites') renderFavoritesTabBody(body, favorites);
+  else renderExcludedTabBody(body, excluded);
 
   const closeBtn = document.createElement('button');
   closeBtn.className = 'btn btn-ghost';
@@ -2211,57 +2202,87 @@ function renderFavorites(){
   el.card.appendChild(closeBtn);
 }
 
-// "Inte för mig" är tänkt som permanent, men allt kan bli fel-tryckt — den
-// här vyn är enda sättet att ångra: en enkel lista med "Ta tillbaka" per
-// ställe, precis som favoriter fast tvärtom.
-function renderExcluded(){
-  el.modeTabs.style.display = 'none';
-  el.steps.style.display = 'none';
-  el.dataNote.textContent = '';
-  el.card.style.minHeight = 'auto';
-  const excluded = getExcluded();
+function renderFavoritesTabBody(body, favorites){
+  if(favorites.length === 0){
+    body.innerHTML = `
+      <h1 style="margin-top:16px;">Inga sparade <em>restauranger än</em></h1>
+      <p class="fav-empty">Tryck på hjärtat på ett förslag för att spara det här.</p>
+    `;
+    return;
+  }
+  body.innerHTML = `<h1 style="margin-top:16px;">Era <em>${favorites.length === 1 ? 'sparade restaurang' : 'sparade restauranger'}</em></h1>`;
+  const frag = document.createDocumentFragment();
+  favorites.forEach(f => {
+    const item = document.createElement('div');
+    item.className = 'fav-list-item clickable';
+    item.tabIndex = 0;
+    item.setAttribute('role', 'button');
+    item.setAttribute('aria-label', `Öppna ${f.name} i Google Maps`);
+    item.innerHTML = `
+      <div><div class="fli-name">${f.name}</div><div class="fli-type">${f.type}</div></div>
+      <button class="fav-btn active" data-remove="${f.name}" aria-label="Ta bort favorit">♥</button>
+    `;
+    const openMaps = () => window.open(mapsUrlFor(f), '_blank', 'noopener');
+    item.addEventListener('click', (e) => {
+      if(e.target.closest('[data-remove]')) return;
+      openMaps();
+    });
+    item.addEventListener('keydown', (e) => {
+      if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-remove]')){
+        e.preventDefault();
+        openMaps();
+      }
+    });
+    frag.appendChild(item);
+  });
+  body.appendChild(frag);
+  body.querySelectorAll('[data-remove]').forEach(btn => {
+    btn.addEventListener('click', (e) => {
+      e.stopPropagation();
+      saveFavorites(getFavorites().filter(f => f.name !== btn.dataset.remove));
+      renderSavedPlaces();
+    });
+  });
+}
 
+// "Inte för mig" är tänkt som permanent, men allt kan bli fel-tryckt — den
+// här fliken är enda sättet att ångra: en enkel lista med "Ta tillbaka"
+// per ställe, precis som favoriter fast tvärtom. Sparas och läses på
+// exakt samma sätt som favoriter (localStorage, se EXCLUDED_KEY) — även
+// för utloggade användare, och överlever siduppdatering av samma skäl.
+function renderExcludedTabBody(body, excluded){
   if(excluded.length === 0){
-    el.card.innerHTML = `
-      <div class="eyebrow">Uteslutna restauranger</div>
-      <h1>Inga <em>uteslutna än</em></h1>
+    body.innerHTML = `
+      <h1 style="margin-top:16px;">Inga <em>uteslutna än</em></h1>
       <p class="fav-empty">Tryck på "Inte för mig" på ett förslag för att aldrig se det igen.</p>
     `;
-  } else {
-    el.card.innerHTML = `
-      <div class="eyebrow">Uteslutna restauranger</div>
-      <h1>${excluded.length === 1 ? 'Ett' : excluded.length} <em>${excluded.length === 1 ? 'utesluten restaurang' : 'uteslutna restauranger'}</em></h1>
-      <p class="lead">De här föreslås aldrig längre. Tryck "Ta tillbaka" om något hamnat här av misstag.</p>
-    `;
-    const frag = document.createDocumentFragment();
-    excluded.forEach(x => {
-      const item = document.createElement('div');
-      item.className = 'fav-list-item';
-      item.innerHTML = `
-        <div><div class="fli-name">${x.name}</div><div class="fli-type">${x.type || ''}</div></div>
-        <button class="btn-ghost" style="width:auto; padding:8px 12px; font-size:12.5px;" data-restore="${x.name}">Ta tillbaka</button>
-      `;
-      frag.appendChild(item);
-    });
-    el.card.appendChild(frag);
-    el.card.querySelectorAll('[data-restore]').forEach(btn => {
-      btn.addEventListener('click', () => {
-        unexcludePlace(btn.dataset.restore);
-        renderExcluded();
-      });
-    });
+    return;
   }
-
-  const closeBtn = document.createElement('button');
-  closeBtn.className = 'btn btn-ghost';
-  closeBtn.style.marginTop = '14px';
-  closeBtn.textContent = 'Stäng';
-  closeBtn.addEventListener('click', () => { state.showExcluded = false; render(); });
-  el.card.appendChild(closeBtn);
+  body.innerHTML = `
+    <h1 style="margin-top:16px;">${excluded.length === 1 ? 'Ett' : excluded.length} <em>${excluded.length === 1 ? 'utesluten restaurang' : 'uteslutna restauranger'}</em></h1>
+    <p class="lead">De här föreslås aldrig längre. Tryck "Ta tillbaka" om något hamnat här av misstag.</p>
+  `;
+  const frag = document.createDocumentFragment();
+  excluded.forEach(x => {
+    const item = document.createElement('div');
+    item.className = 'fav-list-item';
+    item.innerHTML = `
+      <div><div class="fli-name">${x.name}</div><div class="fli-type">${x.type || ''}</div></div>
+      <button class="btn-ghost" style="width:auto; padding:8px 12px; font-size:12.5px;" data-restore="${x.name}">Ta tillbaka</button>
+    `;
+    frag.appendChild(item);
+  });
+  body.appendChild(frag);
+  body.querySelectorAll('[data-restore]').forEach(btn => {
+    btn.addEventListener('click', () => {
+      unexcludePlace(btn.dataset.restore);
+      renderSavedPlaces();
+    });
+  });
 }
 
 el.brandHome.addEventListener('click', goHome);
-el.favToggleBtn.addEventListener('click', () => { state.showFavorites = true; render(); });
+el.favToggleBtn.addEventListener('click', () => { state.showFavorites = true; state.savedTab = 'favorites'; render(); });
 el.accountBtn.addEventListener('click', toggleAccount);
 initFirebase();
 updateAccountUI();
@@ -2505,12 +2526,8 @@ function render(){
     renderAccount();
     return;
   }
-  if(state.showExcluded){
-    renderExcluded();
-    return;
-  }
   if(state.showFavorites){
-    renderFavorites();
+    renderSavedPlaces();
     return;
   }
   if(state.mode === 'home'){
@@ -2823,13 +2840,28 @@ const BUDGET_TIERS = [
 // matchningen, som enbart bryr sig om state.budget (1–4).
 const BUDGET_TIER_AMOUNT = { 1:50, 2:150, 3:300, 4:500 };
 
+// Ikväll-lägets budget gäller PER STÄLLE (förfest, middag och efterfest
+// bedöms alla mot samma nivå var för sig i matchningsmotorn — se
+// computeEveningPlan/scoreCandidate) — inte en totalsumma för hela
+// kvällen. Det var tidigare otydligt eftersom samma "per person"-text
+// användes i alla lägen. "Nu"/"Spontant"/"Med vänner" föreslår en enda
+// restaurang, där "per person" redan är entydigt.
+function budgetLeadText(mode){
+  return mode === 'tonight'
+    ? "Välj ungefär hur mycket ni vill lägga per person och ställe — kvällen blir tre stopp (förfest, middag, efterfest), och nivån gäller vart och ett av dem, inte hela kvällen."
+    : "Välj ungefär hur mycket ni vill lägga per person.";
+}
+function budgetTierSub(mode){
+  return mode === 'tonight' ? "per person, per ställe" : "per person";
+}
+
 function renderBudget(){
   el.card.innerHTML = `
     <div class="eyebrow">Steg 2 · Budget</div>
     <h1>Vad är er <em>budget</em>?</h1>
-    <p class="lead">Välj ungefär hur mycket ni vill lägga per person.</p>
+    <p class="lead">${budgetLeadText(state.mode)}</p>
     <div class="choices" id="budgetList">
-      ${BUDGET_TIERS.map(t => `<div class="choice${state.budget===t.v?' selected':''}" tabindex="0" role="button" data-v="${t.v}"><span>${t.label}</span><span class="tag">${t.sub}</span></div>`).join('')}
+      ${BUDGET_TIERS.map(t => `<div class="choice${state.budget===t.v?' selected':''}" tabindex="0" role="button" data-v="${t.v}"><span>${t.label}</span><span class="tag">${budgetTierSub(state.mode)}</span></div>`).join('')}
     </div>
     <div class="spacer"></div>
     <button class="btn btn-primary" id="nextBtn" ${state.budget ? '' : 'disabled'}>Nästa</button>
@@ -3353,6 +3385,16 @@ async function computeGroupMatches(state){
    (förfest → middag → efterfest) istället för tre fristående alternativ.
    ========================================================================= */
 
+// Varje stopp i kvällen har en tydlig roll — visas dels som en kort
+// undertext i planen, dels används i slotFitText() för att förklara VARFÖR
+// just den här platsen föreslogs för just det här stoppet (inte bara
+// pris/avstånd/vibe som reasonFor() redan täcker).
+const EVENING_SLOTS = [
+  { key:'early', time:"17:30", label:"Förfest",   hint:"en lugn start på kvällen" },
+  { key:'main',  time:"19:30", label:"Middag",    hint:"kvällens huvudmåltid" },
+  { key:'late',  time:"22:00", label:"Efterfest", hint:"något att runda av kvällen med" }
+];
+
 // Ger ett plus i poängen om ett ställes kategori passar tidpunkten, men
 // UTESLUTER inte längre andra ställen helt. Tidigare krävde t.ex. "förfest"
 // exakt ett café och "efterfest" exakt en bar — fanns inget sådant inom
@@ -3360,6 +3402,18 @@ async function computeGroupMatches(state){
 // ställe alltid en plats i planen, med en bonus till det som passar bäst.
 function slotBonus(p, slot){
   return p.slot === slot ? 0.35 : 0;
+}
+
+// Förklarar KOPPLINGEN mellan platsen och just det här stoppet i kvällen
+// — ett komplement till reasonFor() (som redan förklarar pris/avstånd/
+// vibe), inte en upprepning av den. Skriver aldrig ut något stället inte
+// faktiskt är: om det inte finns ett renodlat förfest-/efterfest-ställe
+// sägs det ärligt att det får agera den rollen i brist på bättre.
+function slotFitText(p, slotKey, label){
+  const labelLower = label.toLowerCase();
+  return p.slot === slotKey
+    ? `Passar bra som ${labelLower} — den här typen av ställe brukar fungera för det.`
+    : `Får agera ${labelLower} ikväll, i brist på ett renodlat ${labelLower}-ställe i närheten — men bästa alternativet vi hittade.`;
 }
 
 async function computeEveningPlan(state){
@@ -3382,11 +3436,11 @@ async function computeEveningPlan(state){
     return pick;
   };
 
-  return {
-    early: { time:"17:30", label:"Förfest", place: bestInSlot('early') },
-    main:  { time:"19:30", label:"Middag",  place: bestInSlot('main') },
-    late:  { time:"22:00", label:"Efterfest", place: bestInSlot('late') }
-  };
+  const plan = {};
+  EVENING_SLOTS.forEach(slot => {
+    plan[slot.key] = { time: slot.time, label: slot.label, slotKey: slot.key, hint: slot.hint, place: bestInSlot(slot.key) };
+  });
+  return plan;
 }
 
 function renderEveningPlan(plan){
@@ -3407,10 +3461,21 @@ function renderEveningPlan(plan){
     return;
   }
 
+  // Förtydligar exakt det som annars var oklart: budgeten som valdes i
+  // steg 2 gäller PER STÄLLE (samma nivå bedöms för förfest, middag och
+  // efterfest var för sig — se computeEveningPlan/scoreCandidate), inte
+  // en totalsumma. Den ungefärliga totalen räknas bara fram här för att
+  // ge en känsla för hela kvällens kostnad, den påverkar aldrig matchningen.
+  const perStopAmount = BUDGET_TIER_AMOUNT[state.budget];
+  const totalEstimate = perStopAmount * items.length;
+  const costNote = perStopAmount
+    ? `Er budget (~${perStopAmount} kr per person) gäller per ställe — räkna med runt ~${totalEstimate} kr per person för hela kvällen (${items.length} stopp).`
+    : "";
+
   el.card.innerHTML = `
     <div class="eyebrow">Klart</div>
     <h1>Er <em>kväll</em>, planerad</h1>
-    <p class="lead">Från förfest till efterfest — tre restauranger som passar er stämning och budget ikväll.</p>
+    <p class="lead">Från förfest till efterfest — var och en av de ${items.length} platserna nedan är vald för sin roll i kvällen och matchar er stämning och budget. ${costNote}</p>
     <div class="timeline" id="timelineWrap"></div>
   `;
   const wrap = document.getElementById('timelineWrap');
@@ -3423,7 +3488,7 @@ function renderEveningPlan(plan){
       <div class="timeline-content">
         <div class="result-top" style="margin-bottom:0;">
           <div>
-            <div class="timeline-time">${item.time} · ${item.label}</div>
+            <div class="timeline-time">${item.time} · ${item.label}${item.hint ? ` — ${item.hint}` : ''}</div>
             <div class="result-name">${p.name}</div>
             <div class="result-type">${p.type}</div>
           </div>
@@ -3432,7 +3497,7 @@ function renderEveningPlan(plan){
             <button class="exclude-btn" data-exclude="${p.name}" aria-label="Inte för mig — visa aldrig igen" title="Inte för mig">✕</button>
           </div>
         </div>
-        <div class="result-why">${reasonFor(p, state)}</div>
+        <div class="result-why">${reasonFor(p, state)} ${slotFitText(p, item.slotKey, item.label)}</div>
         <div class="chips">${p.tags.map(t => `<span class="chip">${t}</span>`).join('')}</div>
         ${ratingRow(p)}
         ${hoursBlockHtml(p)}
