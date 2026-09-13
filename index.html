@@ -1144,7 +1144,14 @@ function buildRestaurantProfile(p){
   const mk = (hit, value, conf) => hit ? { value, confidence: conf } : { value: 0.5, confidence: 0 };
   const atmosphere = {
     cozy:        mk(has("Mysigt","Avslappnat"), 0.8, 0.7),
-    lively:      mk(has("Livlig stämning","Socialt","Högt i tak"), 0.8, 0.7),
+    // OBS: "Socialt" räknas INTE som bevis för livlig stämning. För riktig
+    // Google-data sätts "Socialt" bara från goodForGroups ("bra för
+    // grupper") — ett ställe kan vara utmärkt för stora sällskap och ändå
+    // ha en lugn/avslappnad atmosfär (precis det en användare rapporterade:
+    // matchymatchy påstod "livlig stämning" fast Google själva beskrev
+    // stället som "avslappnad"). "Socialt" är ett eget, giltigt bevis för
+    // suitableFor.friends nedan — men det bevisar inget om energinivå.
+    lively:      mk(has("Livlig stämning","Högt i tak"), 0.8, 0.7),
     romantic:    mk(has("Romantiskt","Datevänligt"), 0.8, 0.7),
     quiet:       mk(has("Lugnt"), 0.75, 0.7),
     adventurous: (() => {
@@ -1602,7 +1609,13 @@ function vibeDescriptor(p){
   const tags = p.tags || [];
   const has = (...list) => list.some(t => tags.includes(t));
   if(has("Lugnt", "Mysigt", "Avslappnat")) return "har en lugn, avslappnad känsla";
-  if(has("Livlig stämning", "Socialt", "Högt i tak")) return "har en livlig stämning";
+  // "Socialt" (för riktig data: Googles goodForGroups) betyder "bra för
+  // sällskap", INTE "livlig/energisk atmosfär" — de är inte samma sak (se
+  // kommentaren i buildRestaurantProfile). Egen, ärlig gren istället för
+  // att felaktigt påstå livlig stämning på ett ställe Google själva kan
+  // beskriva som avslappnat.
+  if(has("Livlig stämning", "Högt i tak")) return "har en livlig stämning";
+  if(has("Socialt")) return "passar bra för sällskap";
   if(has("Romantiskt", "Datevänligt")) return "har en romantisk känsla";
   if(has("Äventyrligt", "Hemlig entré")) return "sticker ut lite extra";
   if(has("Utsikt", "Havsnära")) return "har ett fint läge";
