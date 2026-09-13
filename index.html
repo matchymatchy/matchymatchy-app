@@ -1646,20 +1646,50 @@ function favoriteAffinityScore(p, weights){
   return Math.min(1, hits / (max * 2));
 }
 
+// Spontant-läget har INGEN användarvald budget (computeSpontaneousMatches
+// slumpar fram ett internt värde bara för att ge matchningsmotorn något
+// att ranka mot — det är aldrig ett riktigt användarval). Beskrivningen
+// får därför aldrig påstå att stället "ligger nära budgeten", "matchar
+// budgeten" eller är "prisvärt i förhållande till" något användaren inte
+// valt. Bygger enbart på verifierad information om stället självt: dess
+// egna trait-text (redan antingen Googles editorialSummary eller en
+// sammanställning av verifierade fält som uteservering/alkohol/betyg —
+// se liveTrait i PlacesProvider, som ALDRIG hittar på information),
+// atmosfär/koncept via vibeDescriptor (som bara ger ett specifikt svar om
+// stället faktiskt har en tagg som styrker det, annars ett neutralt
+// "verkar vara ett bra val") och avstånd.
+function reasonForSpontaneous(p){
+  const distPart = `ligger ${p.dist.toFixed(1)} km bort`;
+  const vibePart = vibeDescriptor(p);
+  const traitPart = p.trait ? (p.traitStandalone ? ` ${p.trait}` : ` Känt för ${p.trait}.`) : "";
+  const favWeights = getFavoriteTagWeights();
+  const favHits = Object.keys(favWeights).length ? p.tags.filter(t => favWeights[t]) : [];
+  const favPart = favHits.length ? ` Liknar ställen ni sparat som favoriter tidigare (${favHits.slice(0,2).join(", ")}).` : "";
+  const sentence = `${vibePart.charAt(0).toUpperCase()+vibePart.slice(1)} och ${distPart}.`;
+  return sentence + traitPart + favPart;
+}
+
 function reasonFor(p, state){
+  // Spontant har ingen budget att beskriva — se reasonForSpontaneous ovan.
+  if(state.mode === 'spontaneous') return reasonForSpontaneous(p);
+
   const parts = [];
   // Påstå ALDRIG en budgetmatchning på ett ställe vars prisnivå Google
   // inte gett oss (p.priceKnown===false) — se problem 1/4 i kravspecen.
-  // Skriv neutralt istället för att gissa. Ett bekräftat men icke-
-  // matchande pris kan numera visas som sista utväg (se priceTier i
-  // scoreCandidate) — då beskrivs det ärligt som "nära men inte exakt"
-  // istället för att påstås matcha.
+  // Skriv neutralt istället för att gissa. p.priceTier (satt av
+  // scoreCandidate) speglar den STRUKTURELLA prioriteten exakt:
+  //   0 = bekräftad, matchande prisnivå → beskriv som en träff
+  //   1 = obekräftad prisnivå (priceKnown===false) → beskriv neutralt
+  //   2 = bekräftad prisnivå som INTE matchar, visas bara som sista
+  //       utväg när inget bättre finns (se selectTopMatches) → måste
+  //       beskrivas TYDLIGT som utanför budget, aldrig som "nära" eller
+  //       antyda en matchning som inte finns.
   if(p.priceKnown === false){
     parts.push("prisnivå inte bekräftad av Google");
-  } else if(Math.abs(p.price - state.budget) === 0){
+  } else if(p.priceTier === 0){
     parts.push("ligger i er valda prisnivå");
   } else {
-    parts.push("ligger nära er budget, men inte exakt i den");
+    parts.push("ligger utanför er valda budget, men inga bättre budgetmatchningar hittades i närheten");
   }
   parts.push(p.dist<=state.radius ? `${p.dist.toFixed(1)} km bort` : `${p.dist.toFixed(1)} km bort, strax utanför er radie`);
   parts.push(vibeDescriptor(p));
