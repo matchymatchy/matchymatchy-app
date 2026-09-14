@@ -586,7 +586,7 @@ const FIREBASE_ENABLED = !!CONFIG.FIREBASE.apiKey;
 const PlacesProvider = (() => {
 
   // "slot" används bara av kvällsplans-läget (Ikväll) för att bygga en
-  // rutt från förfest till efterfest. "rating"/"reviews" är exempeldata som
+  // rutt från middag till efterfest. "rating"/"reviews" är exempeldata som
   // visas som ett litet recensionsbetyg på varje kort — se kommentaren vid
   // fetchLive() för hur det byts mot riktiga recensioner (t.ex. Google
   // Places har ett "rating"-fält redan inritat där).
@@ -597,7 +597,7 @@ const PlacesProvider = (() => {
     {name:"Grus & Grönt", type:"Vegetariskt kök", price:2, dist:1.1, adv:2, tags:["Hälsosamt","Lugnt"], trait:"en meny som byggs helt efter dagens skörd", slot:"main", rating:4.7, reviews:96, openNow:true},
     {name:"Kajplats 4", type:"Fiskrestaurang · Hamnen", price:3, dist:3.2, adv:3, tags:["Romantiskt","Havsnära"], trait:"råvaror som kommer direkt från morgonens fångst", slot:"main", rating:4.5, reviews:220, openNow:true},
     {name:"Underjorden", type:"Speakeasy-bar", price:2, dist:2.0, adv:5, tags:["Hemlig entré","Äventyrligt"], trait:"en dold ingång bakom en gammal telefonkiosk", slot:"late", rating:4.9, reviews:143, openNow:true},
-    {name:"Smulan", type:"Bakverk & kaffe", price:1, dist:0.5, adv:1, tags:["Prisvärt","Avslappnat"], trait:"kanelbullar som säljer slut innan lunch", slot:"early", rating:4.3, reviews:267, openNow:false},
+    {name:"Smulan", type:"Bakverk & kaffe", price:1, dist:0.5, adv:1, tags:["Prisvärt","Avslappnat"], trait:"kanelbullar som säljer slut innan lunch", slot:"main", rating:4.3, reviews:267, openNow:false},
     {name:"Fabriken 7", type:"Industribar · Craft beer", price:2, dist:2.8, adv:4, tags:["Högt i tak","Socialt"], trait:"tolv fatöl som bryggs i lokalen bakom disken", slot:"late", rating:4.6, reviews:178, openNow:true}
   ];
 
@@ -926,11 +926,10 @@ const PlacesProvider = (() => {
     return list.slice(0, -1).join(", ") + " och " + list[list.length - 1];
   }
 
-  // "Ikväll"-läget (förfest/middag/efterfest) bygger på ett "slot"-fält som
-  // Google inte har — vi gissar det grovt utifrån platstypen så det läget
+  // "Ikväll"-läget (middag/efterfest) bygger på ett "slot"-fält som Google
+  // inte har — vi gissar det grovt utifrån platstypen så det läget
   // fortsätter fungera med riktig data också.
   function guessSlot(primaryType){
-    if(["cafe","bakery"].includes(primaryType)) return "early";
     if(["bar","night_club","pub","wine_bar"].includes(primaryType)) return "late";
     return "main";
   }
@@ -2517,7 +2516,7 @@ function renderStepIndicator(total){
 
 const HOME_MODE_INFO = {
   now:         { emoji:"🎯", desc:"Snabbt quiz om budget, sträcka och stämning — tre matchningar på under en minut." },
-  tonight:     { emoji:"🌙", desc:"Samma quiz, men resultatet blir en hel kväll: förfest, middag och efterfest." },
+  tonight:     { emoji:"🌙", desc:"Samma quiz, men resultatet blir kvällen i två steg: middag och sedan ett bra ställe för efterfest." },
   spontaneous: { emoji:"🎲", desc:"Inga frågor. Ett tryck, så väljer vi åt er." },
   group:       { emoji:"👯", desc:"Du är redan med — lägg till fler om ni är flera, så väger vi ihop allas smak till en matchning som passar hela bordet." },
   date:        { emoji:"💕", desc:"Samma quiz, men vi viktar upp mysiga och romantiska restauranger — perfekt för två." }
@@ -2882,15 +2881,15 @@ const BUDGET_TIERS = [
 // matchningen, som enbart bryr sig om state.budget (1–4).
 const BUDGET_TIER_AMOUNT = { 1:50, 2:150, 3:300, 4:500 };
 
-// Ikväll-lägets budget gäller PER STÄLLE (förfest, middag och efterfest
-// bedöms alla mot samma nivå var för sig i matchningsmotorn — se
+// Ikväll-lägets budget gäller PER STÄLLE (middag och efterfest bedöms
+// båda mot samma nivå var för sig i matchningsmotorn — se
 // computeEveningPlan/scoreCandidate) — inte en totalsumma för hela
 // kvällen. Det var tidigare otydligt eftersom samma "per person"-text
 // användes i alla lägen. "Nu"/"Spontant"/"Med vänner" föreslår en enda
 // restaurang, där "per person" redan är entydigt.
 function budgetLeadText(mode){
   return mode === 'tonight'
-    ? "Välj ungefär hur mycket ni vill lägga per person och ställe — kvällen blir tre stopp (förfest, middag, efterfest), och nivån gäller vart och ett av dem, inte hela kvällen."
+    ? "Välj ungefär hur mycket ni vill lägga per person och ställe — kvällen blir två stopp (middag, efterfest), och nivån gäller vart och ett av dem, inte hela kvällen."
     : "Välj ungefär hur mycket ni vill lägga per person.";
 }
 function budgetTierSub(mode){
@@ -3445,8 +3444,8 @@ async function computeGroupMatches(state){
 
 /* =========================================================================
    LÄGE: IKVÄLL
-   Samma quiz som "Nu", men resultatet blir en kvällsplan i tre steg
-   (förfest → middag → efterfest) istället för tre fristående alternativ.
+   Samma quiz som "Nu", men resultatet blir en kväll i två steg
+   (middag → efterfest) istället för tre fristående alternativ.
    ========================================================================= */
 
 // Varje stopp i kvällen har en tydlig roll — visas dels som en kort
@@ -3454,16 +3453,15 @@ async function computeGroupMatches(state){
 // just den här platsen föreslogs för just det här stoppet (inte bara
 // pris/avstånd/vibe som reasonFor() redan täcker).
 const EVENING_SLOTS = [
-  { key:'early', time:"17:30", label:"Förfest",   hint:"en lugn start på kvällen" },
   { key:'main',  time:"19:30", label:"Middag",    hint:"kvällens huvudmåltid" },
   { key:'late',  time:"22:00", label:"Efterfest", hint:"något att runda av kvällen med" }
 ];
 
 // Ger ett plus i poängen om ett ställes kategori passar tidpunkten, men
-// UTESLUTER inte längre andra ställen helt. Tidigare krävde t.ex. "förfest"
-// exakt ett café och "efterfest" exakt en bar — fanns inget sådant inom
-// radien blev den delen av kvällsplanen bara tom. Nu får bästa tillgängliga
-// ställe alltid en plats i planen, med en bonus till det som passar bäst.
+// UTESLUTER inte längre andra ställen helt. Tidigare krävde t.ex.
+// "efterfest" exakt en bar — fanns inget sådant inom radien blev den delen
+// av kvällsplanen bara tom. Nu får bästa tillgängliga ställe alltid en
+// plats i planen, med en bonus till det som passar bäst.
 function slotBonus(p, slot){
   return p.slot === slot ? 0.35 : 0;
 }
@@ -3471,8 +3469,8 @@ function slotBonus(p, slot){
 // Förklarar KOPPLINGEN mellan platsen och just det här stoppet i kvällen
 // — ett komplement till reasonFor() (som redan förklarar pris/avstånd/
 // vibe), inte en upprepning av den. Skriver aldrig ut något stället inte
-// faktiskt är: om det inte finns ett renodlat förfest-/efterfest-ställe
-// sägs det ärligt att det får agera den rollen i brist på bättre.
+// faktiskt är: om det inte finns ett renodlat efterfest-ställe sägs det
+// ärligt att det får agera den rollen i brist på bättre.
 function slotFitText(p, slotKey, label){
   const labelLower = label.toLowerCase();
   return p.slot === slotKey
@@ -3509,7 +3507,7 @@ async function computeEveningPlan(state){
 
 function renderEveningPlan(plan){
   el.card.style.minHeight = 'auto';
-  const items = [plan.early, plan.main, plan.late].filter(s => s.place);
+  const items = [plan.main, plan.late].filter(s => s.place);
 
   if(items.length === 0){
     el.card.innerHTML = `
@@ -3526,10 +3524,10 @@ function renderEveningPlan(plan){
   }
 
   // Förtydligar exakt det som annars var oklart: budgeten som valdes i
-  // steg 2 gäller PER STÄLLE (samma nivå bedöms för förfest, middag och
-  // efterfest var för sig — se computeEveningPlan/scoreCandidate), inte
-  // en totalsumma. Den ungefärliga totalen räknas bara fram här för att
-  // ge en känsla för hela kvällens kostnad, den påverkar aldrig matchningen.
+  // steg 2 gäller PER STÄLLE (samma nivå bedöms för middag och efterfest
+  // var för sig — se computeEveningPlan/scoreCandidate), inte en
+  // totalsumma. Den ungefärliga totalen räknas bara fram här för att ge
+  // en känsla för hela kvällens kostnad, den påverkar aldrig matchningen.
   const perStopAmount = BUDGET_TIER_AMOUNT[state.budget];
   const totalEstimate = perStopAmount * items.length;
   const costNote = perStopAmount
@@ -3539,7 +3537,7 @@ function renderEveningPlan(plan){
   el.card.innerHTML = `
     <div class="eyebrow">Klart</div>
     <h1>Er <em>kväll</em>, planerad</h1>
-    <p class="lead">Från förfest till efterfest — var och en av de ${items.length} platserna nedan är vald för sin roll i kvällen och matchar er stämning och budget. ${costNote}</p>
+    <p class="lead">Från middag till efterfest — var och en av de ${items.length} platserna nedan är vald för sin roll i kvällen och matchar er stämning och budget. ${costNote}</p>
     <div class="timeline" id="timelineWrap"></div>
   `;
   const wrap = document.getElementById('timelineWrap');
@@ -3644,7 +3642,7 @@ FLOWS = {
     loadingTitle: "Bygger <em>kvällsplanen…</em>",
     loadingMessages: () => [
       "Kollar vad som är öppet ikväll…",
-      "Väljer förfest, middag och efterfest…",
+      "Väljer middag och ett bra ställe för efterfest…",
       "Sätter ihop rutten…",
       "Klar strax…"
     ]
