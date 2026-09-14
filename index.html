@@ -341,15 +341,29 @@
   .pill.selected{ border-color: var(--accent); background: rgba(255,107,91,0.14); color: var(--accent-2); }
   .pill:focus-visible{ outline: 2px solid var(--accent-2); outline-offset: 2px; }
 
-  .people-row{
-    display:flex; align-items:center; justify-content:space-between; gap:10px;
-    background: rgba(251,243,233,0.05); border:1px solid var(--line);
-    border-radius:12px; padding:10px 12px; margin-bottom:8px; font-size:13.5px; font-weight:600;
+  /* "Med vänner" — varje person redigeras direkt i sitt eget kort (inga
+     separata "utkast"-steg), se renderGroupPeople(). */
+  .person-card{
+    border:1px solid var(--line); border-radius:14px; padding:12px 12px 4px;
+    margin-bottom:10px; background: rgba(251,243,233,0.035);
   }
-  .people-row .meta{ font-size:11.5px; color: var(--muted); font-weight:500; margin-top:1px; }
-  .people-row .remove{ color: var(--muted); font-size:12px; font-weight:600; cursor:pointer; }
-  .people-row .remove:active{ opacity:0.6; }
-  .people-empty{ font-size:13px; color: var(--muted); margin: 0 0 4px; }
+  .person-head{
+    display:flex; align-items:center; justify-content:space-between;
+    margin-bottom:8px; font-size:13.5px; font-weight:700;
+  }
+  .person-head .remove{ color: var(--muted); font-size:12px; font-weight:600; cursor:pointer; }
+  .person-head .remove:active{ opacity:0.6; }
+  .micro-label{
+    font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:1px;
+    color: var(--muted); margin: 0 0 6px;
+  }
+  .person-card .pill-row{ margin-bottom:12px; }
+  .add-person-btn{
+    width:100%; text-align:center; padding:12px 6px; border-radius:12px;
+    border:1px dashed var(--line); background:transparent; color: var(--cream);
+    font-weight:700; font-size:13.5px; cursor:pointer; margin-bottom:18px;
+  }
+  .add-person-btn:active{ transform: scale(0.98); }
 
   .timeline{ display:flex; flex-direction:column; margin-top:6px; }
   .timeline-item{ display:flex; gap:14px; }
@@ -1799,8 +1813,7 @@ const state = {
   mode: 'home',
   step: 0,
   budget: null, budgetAmount: 300, radius: 3, adventure: 3, coords: null,
-  people: [],                         // "Med vänner": tillagda personer
-  groupDraft: { budget: null, adventure: null }, // "Med vänner": person som håller på att läggas till
+  people: [],                         // "Med vänner": alla i sällskapet, inkl. dig själv
   groupSize: 0,
   showFavorites: false,
   showAccount: false,
@@ -2443,7 +2456,6 @@ function goHome(){
   state.step = 0;
   state.coords = null;
   state.people = [];
-  state.groupDraft = { budget: null, adventure: null };
   state.groupSize = 0;
   state.showFavorites = false;
   state.showAccount = false;
@@ -2481,7 +2493,6 @@ function switchMode(mode){
   state.step = 0;
   state.coords = null;
   state.people = [];
-  state.groupDraft = { budget: null, adventure: null };
   state.groupSize = 0;
   state.vibeSource = null; state.vibeId = null; state.vibeLabel = ''; state.vibeTags = []; state.customVibeText = '';
   state.seenNames = [];
@@ -2508,7 +2519,7 @@ const HOME_MODE_INFO = {
   now:         { emoji:"🎯", desc:"Snabbt quiz om budget, sträcka och stämning — tre matchningar på under en minut." },
   tonight:     { emoji:"🌙", desc:"Samma quiz, men resultatet blir en hel kväll: förfest, middag och efterfest." },
   spontaneous: { emoji:"🎲", desc:"Inga frågor. Ett tryck, så väljer vi åt er." },
-  group:       { emoji:"👯", desc:"Lägg till hela gänget så väger vi ihop allas smak till en matchning alla gillar." },
+  group:       { emoji:"👯", desc:"Du är redan med — lägg till fler om ni är flera, så väger vi ihop allas smak till en matchning som passar hela bordet." },
   date:        { emoji:"💕", desc:"Samma quiz, men vi viktar upp mysiga och romantiska restauranger — perfekt för två." }
 };
 
@@ -3221,7 +3232,9 @@ function renderResults(matches){
   const modeLead = {
     now: "Baserat på budget, avstånd och er vibe — här är vad matchymatchy hittade åt er.",
     spontaneous: "Vi slumpade fram budget, sträcka och stämning å era vägnar — här är vad vi hittade.",
-    group: `Vi vägde ihop smaken hos ${state.groupSize || 1} ${state.groupSize === 1 ? 'person' : 'personer'} och hittade det här.`,
+    group: state.groupSize > 1
+      ? `Vi vägde ihop smaken hos ${state.groupSize} personer och hittade det här.`
+      : "Här är vad vi hittade utifrån din smak — lägg till fler vänner nästa gång för en gemensam matchning.",
     date: "Vi viktade upp mysiga, romantiska restauranger — här är vad som passade bäst för er två."
   };
 
@@ -3333,80 +3346,100 @@ async function computeSpontaneousMatches(state){
 
 /* =========================================================================
    LÄGE: MED VÄNNER
-   Lägg till allas budget + stämning en i taget, vi räknar ut ett snitt
-   (kompromiss) och kör det snittet genom samma computeMatches som vanligt.
+   Varje person redigeras direkt i sitt eget kort — inget separat
+   "utkast"-steg att fylla i innan man kan lägga till nästa. Du är alltid
+   redan med (som "Du"), så det går att trycka sig vidare direkt utan att
+   röra något alls; att lägga till en vän är ETT tryck, och deras
+   budget/stämning justeras genom att trycka direkt på deras egna pills.
+   Snittet av allas val (avg) körs sedan genom samma computeMatches som
+   vanligt, precis som innan — bara sättet att SAMLA IN preferenserna är
+   nytt. Delar location- och radius-stegen med de andra lägena (se
+   FLOWS.group nedan) istället för att tyst hoppa över dem, så en sökning
+   för hela gänget faktiskt scannar rätt område precis som alla andra lägen.
    ========================================================================= */
-function peopleRowHtml(p, i){
-  return `<div class="people-row">
-    <div><div>${p.name}</div><div class="meta">${budgetLabelShort(p.budget)} · ${advLabelShort(p.adventure)}</div></div>
-    <span class="remove" data-remove="${i}">Ta bort</span>
+const GROUP_BUDGET_OPTIONS = [{v:1,l:"€"},{v:2,l:"€€"},{v:3,l:"€€€"},{v:4,l:"€€€€"}];
+const GROUP_ADVENTURE_OPTIONS = [{v:1,l:"Säkert"},{v:3,l:"Lite nytt"},{v:5,l:"Överraska"}];
+
+// Ingen namnfråga (det vore ett extra steg för lite värde) — bara en
+// stabil, läsbar etikett per plats i listan. Du är alltid person 0.
+function personLabel(i){ return i === 0 ? "Du" : `Vän ${i + 1}`; }
+
+function personCardHtml(p, i){
+  return `<div class="person-card" data-idx="${i}">
+    <div class="person-head">
+      <span>${personLabel(i)}</span>
+      ${i > 0 ? `<span class="remove" data-remove="${i}">Ta bort</span>` : ''}
+    </div>
+    <div class="micro-label">Budget</div>
+    <div class="pill-row" data-role="budget" data-idx="${i}">
+      ${GROUP_BUDGET_OPTIONS.map(o => `<div class="pill${p.budget===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
+    </div>
+    <div class="micro-label">Stämning</div>
+    <div class="pill-row" data-role="adventure" data-idx="${i}">
+      ${GROUP_ADVENTURE_OPTIONS.map(o => `<div class="pill${p.adventure===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
+    </div>
   </div>`;
 }
-function budgetLabelShort(v){ return {1:"€",2:"€€",3:"€€€",4:"€€€€"}[v] || "–"; }
-function advLabelShort(v){ return {1:"Säkert",3:"Lite nytt",5:"Överraska"}[v] || "–"; }
 
 function renderGroupPeople(){
-  const draft = state.groupDraft;
+  // Första gången man kommer hit i den här sökningen: du är redan med i
+  // sällskapet, förifylld med din senast sparade budget/stämning (eller
+  // ett neutralt mellanläge om det är första besöket). Det är det som gör
+  // det möjligt att trycka sig vidare direkt utan att fylla i något alls.
+  if(!state.people.length){
+    state.people.push({ budget: state.budget || 2, adventure: state.adventure || 3 });
+  }
+
   el.card.innerHTML = `
-    <div class="eyebrow">Med vänner</div>
-    <h1>Vilka är <em>med ikväll?</em></h1>
-    <p class="lead">Lägg till alla i gänget, en i taget — vi väger ihop allas smak till en gemensam matchning.</p>
+    <div class="eyebrow">Steg 2 · Sällskapet</div>
+    <h1>Hur äter <em>gänget</em>?</h1>
+    <p class="lead">Vi väger ihop allas budget och stämning till en matchning som passar hela bordet — inte bara en person. Du är redan med; lägg till fler om ni är flera.</p>
 
-    <div id="peopleList">
-      ${state.people.length ? state.people.map(peopleRowHtml).join('') : `<p class="people-empty">Ingen tillagd än.</p>`}
-    </div>
-
-    <div class="field-label">Ny person · budget</div>
-    <div class="pill-row" id="draftBudget">
-      ${[{v:1,l:"€"},{v:2,l:"€€"},{v:3,l:"€€€"},{v:4,l:"€€€€"}].map(o=>`<div class="pill${draft.budget===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
-    </div>
-    <div class="field-label">Stämning</div>
-    <div class="pill-row" id="draftAdv">
-      ${[{v:1,l:"Säkert"},{v:3,l:"Lite nytt"},{v:5,l:"Överraska"}].map(o=>`<div class="pill${draft.adventure===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
-    </div>
-    <button class="btn btn-ghost" id="addPersonBtn" style="border:1px solid var(--line); border-radius:12px; margin-top:8px;" ${draft.budget && draft.adventure ? '' : 'disabled'}>+ Lägg till person</button>
+    <div id="peopleList">${state.people.map(personCardHtml).join('')}</div>
+    <button class="add-person-btn" id="addPersonBtn" type="button">+ Lägg till vän</button>
 
     <div class="spacer"></div>
-    <button class="btn btn-primary" id="groupNextBtn" ${state.people.length ? '' : 'disabled'}>Hitta matchningar för gänget</button>
+    <button class="btn btn-primary" id="groupNextBtn">Hitta matchningar för gänget</button>
   `;
 
-  el.card.querySelectorAll('#peopleList [data-remove]').forEach(btn=>{
+  el.card.querySelectorAll('#peopleList [data-remove]').forEach(btn => {
     btn.addEventListener('click', () => {
       state.people.splice(parseInt(btn.dataset.remove, 10), 1);
       render();
     });
   });
-  el.card.querySelectorAll('#draftBudget .pill').forEach(p=>{
-    p.addEventListener('click', () => { state.groupDraft.budget = parseInt(p.dataset.v, 10); render(); });
-  });
-  el.card.querySelectorAll('#draftAdv .pill').forEach(p=>{
-    p.addEventListener('click', () => { state.groupDraft.adventure = parseInt(p.dataset.v, 10); render(); });
-  });
-  const addBtn = document.getElementById('addPersonBtn');
-  if(addBtn){
-    addBtn.addEventListener('click', () => {
-      state.people.push({ name: `Person ${state.people.length+1}`, budget: state.groupDraft.budget, adventure: state.groupDraft.adventure });
-      state.groupDraft = { budget: null, adventure: null };
-      render();
+  el.card.querySelectorAll('#peopleList .pill-row').forEach(row => {
+    const idx = parseInt(row.dataset.idx, 10);
+    const role = row.dataset.role; // "budget" eller "adventure"
+    row.querySelectorAll('.pill').forEach(pill => {
+      pill.addEventListener('click', () => {
+        state.people[idx][role] = parseInt(pill.dataset.v, 10);
+        render();
+      });
     });
-  }
-  const nextBtn = document.getElementById('groupNextBtn');
-  if(!nextBtn.disabled){
-    nextBtn.addEventListener('click', () => { state.step++; render(); });
-  }
+  });
+  document.getElementById('addPersonBtn').addEventListener('click', () => {
+    // Ny vän startar med samma val som den senaste — oftast närmare vad
+    // gänget faktiskt vill ha än att alltid börja om på ett neutralt läge,
+    // och det går fortfarande snabbt att justera med ett par tryck.
+    const last = state.people[state.people.length - 1];
+    state.people.push({ budget: last.budget, adventure: last.adventure });
+    render();
+  });
+  document.getElementById('groupNextBtn').addEventListener('click', () => { state.step++; render(); });
 }
 
 async function computeGroupMatches(state){
-  const people = state.people.length ? state.people : [{ name:"Du", budget: state.budget || 2, adventure: state.adventure || 3 }];
+  const people = state.people.length ? state.people : [{ budget: state.budget || 2, adventure: state.adventure || 3 }];
   const avg = (key) => people.reduce((sum,p)=>sum+p[key],0) / people.length;
 
   state.budget = Math.min(4, Math.max(1, Math.round(avg('budget'))));
   state.adventure = Math.min(5, Math.max(1, Math.round(avg('adventure'))));
   state.budgetAmount = BUDGET_TIER_AMOUNT[state.budget];
-  state.radius = state.radius || 3;
   state.groupSize = people.length;
-  if(!state.coords) state.coords = await quickLocation();
-
+  // Plats och radie samlas numera in av samma steg (renderLocation/
+  // renderRadius) som "Nu"/"Ikväll"/"Dejt" använder — se FLOWS.group. Ingen
+  // egen platslogik behövs längre här.
   return computeMatches(state);
 }
 
@@ -3624,10 +3657,10 @@ FLOWS = {
     loadingMessages: () => ["Slumpar fram något bra…", "Dubbelkollar att det passar…", "Klart snart…"]
   },
   group: {
-    steps: [renderGroupPeople],
+    steps: [renderLocation, renderGroupPeople, renderRadius],
     matcher: computeGroupMatches,
     resultRenderer: renderResults,
-    loadingMessages: () => ["Väger ihop allas önskemål…", "Hittar en kompromiss alla gillar…", "Rankar bästa matchningarna…"]
+    loadingMessages: (s) => [`Analyserar platser inom ${formatKm(s.radius)}…`, "Väger ihop allas önskemål…", "Hittar en kompromiss alla gillar…", "Rankar bästa matchningarna…"]
   },
   date: {
     steps: [renderLocation, renderBudget, renderRadius, renderVibe],
