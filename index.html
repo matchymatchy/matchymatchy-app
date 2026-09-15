@@ -341,29 +341,15 @@
   .pill.selected{ border-color: var(--accent); background: rgba(255,107,91,0.14); color: var(--accent-2); }
   .pill:focus-visible{ outline: 2px solid var(--accent-2); outline-offset: 2px; }
 
-  /* "Med vänner" — varje person redigeras direkt i sitt eget kort (inga
-     separata "utkast"-steg), se renderGroupPeople(). */
-  .person-card{
-    border:1px solid var(--line); border-radius:14px; padding:12px 12px 4px;
-    margin-bottom:10px; background: rgba(251,243,233,0.035);
+  .people-row{
+    display:flex; align-items:center; justify-content:space-between; gap:10px;
+    background: rgba(251,243,233,0.05); border:1px solid var(--line);
+    border-radius:12px; padding:10px 12px; margin-bottom:8px; font-size:13.5px; font-weight:600;
   }
-  .person-head{
-    display:flex; align-items:center; justify-content:space-between;
-    margin-bottom:8px; font-size:13.5px; font-weight:700;
-  }
-  .person-head .remove{ color: var(--muted); font-size:12px; font-weight:600; cursor:pointer; }
-  .person-head .remove:active{ opacity:0.6; }
-  .micro-label{
-    font-size:10.5px; font-weight:700; text-transform:uppercase; letter-spacing:1px;
-    color: var(--muted); margin: 0 0 6px;
-  }
-  .person-card .pill-row{ margin-bottom:12px; }
-  .add-person-btn{
-    width:100%; text-align:center; padding:12px 6px; border-radius:12px;
-    border:1px dashed var(--line); background:transparent; color: var(--cream);
-    font-weight:700; font-size:13.5px; cursor:pointer; margin-bottom:18px;
-  }
-  .add-person-btn:active{ transform: scale(0.98); }
+  .people-row .meta{ font-size:11.5px; color: var(--muted); font-weight:500; margin-top:1px; }
+  .people-row .remove{ color: var(--muted); font-size:12px; font-weight:600; cursor:pointer; }
+  .people-row .remove:active{ opacity:0.6; }
+  .people-empty{ font-size:13px; color: var(--muted); margin: 0 0 4px; }
 
   .timeline{ display:flex; flex-direction:column; margin-top:6px; }
   .timeline-item{ display:flex; gap:14px; }
@@ -576,17 +562,14 @@ const FIREBASE_ENABLED = !!CONFIG.FIREBASE.apiKey;
    PLACES PROVIDER
    Ett enda ställe som levererar platser till appen. Idag returnerar den
    fejkad data. Bytpunkten till Google Places API (New) är fetchLive().
-   Formen på varje plats-objekt {name, type, price, priceKnown, dist, adv,
-   tags, trait, lat, lng} är kontraktet resten av appen bygger på — håll
-   live-datan i samma form så inget annat behöver ändras. priceKnown är
-   false bara för riktiga Google-träffar utan verifierad priceLevel; mock-
-   /gruppdata saknar fältet helt och tolkas därför som känt (se
-   buildRestaurantProfile).
+   Formen på varje plats-objekt {name, type, price, dist, adv, tags, trait,
+   lat, lng} är kontraktet resten av appen bygger på — håll live-datan i
+   samma form så inget annat behöver ändras.
    ========================================================================= */
 const PlacesProvider = (() => {
 
   // "slot" används bara av kvällsplans-läget (Ikväll) för att bygga en
-  // rutt från middag till efterfest. "rating"/"reviews" är exempeldata som
+  // rutt från förfest till efterfest. "rating"/"reviews" är exempeldata som
   // visas som ett litet recensionsbetyg på varje kort — se kommentaren vid
   // fetchLive() för hur det byts mot riktiga recensioner (t.ex. Google
   // Places har ett "rating"-fält redan inritat där).
@@ -597,7 +580,7 @@ const PlacesProvider = (() => {
     {name:"Grus & Grönt", type:"Vegetariskt kök", price:2, dist:1.1, adv:2, tags:["Hälsosamt","Lugnt"], trait:"en meny som byggs helt efter dagens skörd", slot:"main", rating:4.7, reviews:96, openNow:true},
     {name:"Kajplats 4", type:"Fiskrestaurang · Hamnen", price:3, dist:3.2, adv:3, tags:["Romantiskt","Havsnära"], trait:"råvaror som kommer direkt från morgonens fångst", slot:"main", rating:4.5, reviews:220, openNow:true},
     {name:"Underjorden", type:"Speakeasy-bar", price:2, dist:2.0, adv:5, tags:["Hemlig entré","Äventyrligt"], trait:"en dold ingång bakom en gammal telefonkiosk", slot:"late", rating:4.9, reviews:143, openNow:true},
-    {name:"Smulan", type:"Bakverk & kaffe", price:1, dist:0.5, adv:1, tags:["Prisvärt","Avslappnat"], trait:"kanelbullar som säljer slut innan lunch", slot:"main", rating:4.3, reviews:267, openNow:false},
+    {name:"Smulan", type:"Bakverk & kaffe", price:1, dist:0.5, adv:1, tags:["Prisvärt","Avslappnat"], trait:"kanelbullar som säljer slut innan lunch", slot:"early", rating:4.3, reviews:267, openNow:false},
     {name:"Fabriken 7", type:"Industribar · Craft beer", price:2, dist:2.8, adv:4, tags:["Högt i tak","Socialt"], trait:"tolv fatöl som bryggs i lokalen bakom disken", slot:"late", rating:4.6, reviews:178, openNow:true}
   ];
 
@@ -608,101 +591,9 @@ const PlacesProvider = (() => {
     return MOCK_PLACES;
   }
 
-  // Radie under den här gränsen täcks tillräckligt bra av EN cirkelsökning
-  // — rutnätet nedan aktiveras bara när det faktiskt behövs, för att hålla
-  // API-anropen (och kostnaden) nere.
-  const GRID_SPLIT_RADIUS_KM = 2;
-
-  // En enda searchNearby-sökning med stor radie missgynnar systematiskt
-  // användarens EGET närområde: Google fyller sina (max 20) resultatplatser
-  // med de mest relevanta/populära träffarna i HELA cirkeln. I praktiken
-  // blir det ofta en tät, populär stadsdel (t.ex. Södermalm i Stockholm)
-  // — även när användaren står långt därifrån (t.ex. Täby) med en stor
-  // vald radie, eftersom den enda sökpunkten ligger mitt i användarens
-  // ände av cirkeln men Googles 20 träffar ändå domineras av den tätaste
-  // delen av HELA cirkeln. Detta är INGEN hårdkodad Södermalm-regel någon
-  // annanstans i koden — det är en strukturell konsekvens av att bara
-  // fråga en gång. Lösningen: sök av HELA det valda området med flera
-  // överlappande cirklar (en central + en ring runt om), deduplicera på
-  // placeId, och filtrera sedan exakt på riktigt avstånd (Haversine mot
-  // användarens FAKTISKA koordinater, inte gridpunkten) i applyHardFilters.
-  function buildSearchGrid(center, radiusKm){
-    if(radiusKm <= GRID_SPLIT_RADIUS_KM){
-      return [{ lat: center.lat, lng: center.lng, radiusM: radiusKm * 1000 }];
-    }
-    // 1 central punkt + 6 punkter i en ring (60° mellanrum). Varje punkts
-    // egen sökradie (62% av vald radie) överlappar både grannpunkterna i
-    // ringen och centrumpunkten, så det inte uppstår några otäckta luckor
-    // mellan sökcirklarna.
-    const subRadiusKm = radiusKm * 0.62;
-    const ringDistanceKm = radiusKm * 0.55;
-    const points = [{ lat: center.lat, lng: center.lng, radiusM: subRadiusKm * 1000 }];
-    for(let i = 0; i < 6; i++){
-      const angle = (Math.PI / 3) * i;
-      const dLat = (ringDistanceKm / 111.32) * Math.cos(angle);
-      const dLng = (ringDistanceKm / (111.32 * Math.cos(center.lat * Math.PI / 180))) * Math.sin(angle);
-      points.push({ lat: center.lat + dLat, lng: center.lng + dLng, radiusM: subRadiusKm * 1000 });
-    }
-    return points;
-  }
-
-  // "includedTypes" matchar mot HELA platsens typ-lista, vilket är varför
-  // t.ex. en saluhall (en marknad som har "restaurant" som en av flera
-  // taggar, inte sin faktiska huvudkategori) kunde smyga sig in som
-  // förslag. "includedPrimaryTypes" matchar bara mot platsens FAKTISKA
-  // huvudkategori och är betydligt mer träffsäkert.
-  const INCLUDED_PRIMARY_TYPES = ["restaurant", "bar", "cafe"];
-  // Snabbmat, matbutiker, boenden och bensinmackar klassas av Google som
-  // egna primärtyper — utesluts helt här så de aldrig kan dyka upp som
-  // förslag, oavsett vad poängsättningen längre ner skulle landa i.
-  const EXCLUDED_PRIMARY_TYPES = [
-    "fast_food_restaurant", "meal_takeaway", "meal_delivery",
-    "sandwich_shop", "food_court", "deli",
-    "lodging", "hostel", "hotel", "motel", "resort_hotel", "campground", "rv_park",
-    "gas_station", "convenience_store", "supermarket", "grocery_store",
-    "department_store", "shopping_mall", "market"
-  ];
-
-  // Ett enda searchNearby-anrop mot en sökpunkt i gridet. Returnerar de rå
-  // Google-objekten (odedupade, omappade) — sammanslagning/deduplicering
-  // sköts av fetchLive() efter att alla gridpunkter svarat.
-  async function searchNearbyOnce(point){
-    const body = {
-      includedPrimaryTypes: INCLUDED_PRIMARY_TYPES,
-      excludedPrimaryTypes: EXCLUDED_PRIMARY_TYPES,
-      maxResultCount: 20,
-      languageCode: "sv",
-      locationRestriction: {
-        circle: {
-          center: { latitude: point.lat, longitude: point.lng },
-          radius: point.radiusM
-        }
-      }
-    };
-    const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": CONFIG.GOOGLE_MAPS_API_KEY,
-        // FieldMask styr vad ni betalar för — håll den snäv. Samma fältmask
-        // återanvänds för varje gridpunkt.
-        // OBS: "places.types" är en oordnad lista — det är INTE samma sak
-        // som platsens huvudkategori. Vi hämtar "primaryType" separat
-        // eftersom det är fältet Google faktiskt avsett för kategorisering
-        // (se kommentar vid tidigare bugg i guessSlot/capitalizeType nedan).
-        // "currentOpeningHours" ger öppet/stängt just nu (tar hänsyn till
-        // tillfälliga avvikelser, t.ex. helgdagar) — "regularOpeningHours"
-        // ger den vanliga veckoscheman-texten att visa i listan.
-        "X-Goog-FieldMask": "places.id,places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount,places.editorialSummary,places.outdoorSeating,places.goodForGroups,places.servesVegetarianFood,places.servesBeer,places.servesWine,places.servesCocktails,places.currentOpeningHours,places.regularOpeningHours"
-      },
-      body: JSON.stringify(body)
-    });
-    if(!res.ok) throw new Error("Places API-anrop misslyckades: " + res.status);
-    const data = await res.json();
-    return data.places || [];
-  }
-
   // Byt ut mot riktiga anrop när CONFIG.USE_LIVE_DATA = true.
+  // Nedan är den faktiska formen på ett Places API (New) Nearby Search-
+  // anrop, redo att aktiveras — kommenterad ut tills en nyckel finns på plats.
   async function fetchLive(criteria){
     if(!CONFIG.GOOGLE_MAPS_API_KEY){
       console.warn("matchymatchy: GOOGLE_MAPS_API_KEY saknas, faller tillbaka på fejkad data.");
@@ -719,30 +610,56 @@ const PlacesProvider = (() => {
       return fetchMock(criteria);
     }
 
-    const gridPoints = buildSearchGrid(criteria.coords, criteria.radiusKm);
-    const settled = await Promise.allSettled(gridPoints.map(pt => searchNearbyOnce(pt)));
+    const body = {
+      // "includedTypes" matchar mot HELA platsens typ-lista, vilket är
+      // varför t.ex. en saluhall (en marknad som har "restaurant" som en
+      // av flera taggar, inte sin faktiska huvudkategori) kunde smyga sig
+      // in som förslag. "includedPrimaryTypes" matchar bara mot platsens
+      // FAKTISKA huvudkategori och är betydligt mer träffsäkert.
+      includedPrimaryTypes: ["restaurant", "bar", "cafe"],
+      // Snabbmat, matbutiker, boenden och bensinmackar klassas av Google
+      // som egna primärtyper — utesluts helt här så de aldrig kan dyka upp
+      // som förslag, oavsett vad poängsättningen längre ner skulle landa i.
+      excludedPrimaryTypes: [
+        "fast_food_restaurant", "meal_takeaway", "meal_delivery",
+        "sandwich_shop", "food_court", "deli",
+        "lodging", "hostel", "hotel", "motel", "resort_hotel", "campground", "rv_park",
+        "gas_station", "convenience_store", "supermarket", "grocery_store",
+        "department_store", "shopping_mall", "market"
+      ],
+      maxResultCount: 20,
+      languageCode: "sv",
+      locationRestriction: {
+        circle: {
+          center: { latitude: criteria.coords.lat, longitude: criteria.coords.lng },
+          radius: criteria.radiusKm * 1000
+        }
+      }
+    };
 
-    const failed = settled.filter(r => r.status === "rejected");
-    if(failed.length){
-      console.warn(`matchymatchy: ${failed.length}/${gridPoints.length} rutnätssökningar mot Places API misslyckades`, failed.map(f => f.reason));
-    }
-    if(failed.length === settled.length){
-      // Samtliga sökpunkter misslyckades — inget att visa, låt anroparen
-      // hantera det precis som ett enskilt misslyckat anrop tidigare gjorde.
-      throw new Error("Places API-anrop misslyckades: samtliga sökpunkter gav fel");
-    }
-
-    // Deduplicera på placeId INNAN mappning/poängsättning — annars skulle
-    // samma restaurang kunna räknas flera gånger bara för att den låg inom
-    // flera överlappande sökcirklar i gridet.
-    const byPlaceId = new Map();
-    settled.forEach(r => {
-      if(r.status !== "fulfilled") return;
-      r.value.forEach(p => { if(p.id && !byPlaceId.has(p.id)) byPlaceId.set(p.id, p); });
+    const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": CONFIG.GOOGLE_MAPS_API_KEY,
+        // FieldMask styr vad ni betalar för — håll den snäv.
+        // OBS: "places.types" är en oordnad lista — det är INTE samma sak
+        // som platsens huvudkategori. Vi hämtar "primaryType" separat
+        // eftersom det är fältet Google faktiskt avsett för kategorisering
+        // (se kommentar vid tidigare bugg i guessSlot/capitalizeType nedan).
+        // "currentOpeningHours" ger öppet/stängt just nu (tar hänsyn till
+        // tillfälliga avvikelser, t.ex. helgdagar) — "regularOpeningHours"
+        // ger den vanliga veckoscheman-texten att visa i listan.
+        "X-Goog-FieldMask": "places.id,places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount,places.editorialSummary,places.outdoorSeating,places.goodForGroups,places.servesVegetarianFood,places.servesBeer,places.servesWine,places.servesCocktails,places.currentOpeningHours,places.regularOpeningHours"
+      },
+      body: JSON.stringify(body)
     });
 
+    if(!res.ok) throw new Error("Places API-anrop misslyckades: " + res.status);
+    const data = await res.json();
+
     // Mappa Google-formatet till appens interna plats-form.
-    return Array.from(byPlaceId.values())
+    return (data.places || [])
       .filter(p => !isWrongCategory(p))
       .map(p => {
       // primaryType/primaryTypeDisplayName är Googles egna, avsedda fält för
@@ -761,11 +678,6 @@ const PlacesProvider = (() => {
         name: p.displayName?.text || "Okänd restaurang",
         type: typeLabel,
         price: mapGooglePriceLevel(p.priceLevel),
-        // true bara om Google faktiskt gav en priceLevel vi kan lita på.
-        // Används av applyHardFilters/matchRestaurant/reasonFor för att
-        // ALDRIG påstå en budgetmatchning (eller ett hårt avslag) på en
-        // gissning — se problem 1/2 i kravspecen.
-        priceKnown: isKnownGooglePriceLevel(p.priceLevel),
         dist: haversineKm(criteria.coords, { lat: p.location.latitude, lng: p.location.longitude }),
         // Google ger ingen "äventyrsnivå" för riktiga sökresultat. Tidigare
         // stod det en HÅRDKODAD adv:3 här för ALLA live-träffar, som om det
@@ -855,25 +767,12 @@ const PlacesProvider = (() => {
     return KNOWN_CHAIN_NAME_PATTERNS.some(re => re.test(name));
   }
 
-  // Fyra egna nivåer, en per Google-nivå — ingen ihopslagning längre.
-  // Tidigare hamnade "dyrt" och "väldigt dyrt" i samma bucket (3), vilket
-  // gjorde att budgetreglaget inte gick att lita på i den övre delen.
-  const GOOGLE_PRICE_LEVEL_MAP = { PRICE_LEVEL_FREE:1, PRICE_LEVEL_INEXPENSIVE:1, PRICE_LEVEL_MODERATE:2, PRICE_LEVEL_EXPENSIVE:3, PRICE_LEVEL_VERY_EXPENSIVE:4 };
-
   function mapGooglePriceLevel(level){
-    // OBS: fallback till 2 här är bara för att alltid ha ett NUMERISKT värde
-    // att räkna med (t.ex. sortering) — den får ALDRIG tolkas som en
-    // bekräftad "måttlig" prisnivå. Använd isKnownGooglePriceLevel() för att
-    // veta om priset faktiskt är verifierat av Google innan det används i
-    // en budgetjämförelse eller beskrivning (se priceKnown-fältet nedan).
-    return GOOGLE_PRICE_LEVEL_MAP[level] || 2;
-  }
-
-  // true bara om Google faktiskt returnerat en av sina kända prisnivåer.
-  // Många restauranger saknar priceLevel helt — det ska aldrig tolkas som
-  // "måttligt pris" (se mapGooglePriceLevel-kommentaren).
-  function isKnownGooglePriceLevel(level){
-    return Object.prototype.hasOwnProperty.call(GOOGLE_PRICE_LEVEL_MAP, level);
+    // Fyra egna nivåer, en per Google-nivå — ingen ihopslagning längre.
+    // Tidigare hamnade "dyrt" och "väldigt dyrt" i samma bucket (3), vilket
+    // gjorde att budgetreglaget inte gick att lita på i den övre delen.
+    const map = { PRICE_LEVEL_FREE:1, PRICE_LEVEL_INEXPENSIVE:1, PRICE_LEVEL_MODERATE:2, PRICE_LEVEL_EXPENSIVE:3, PRICE_LEVEL_VERY_EXPENSIVE:4 };
+    return map[level] || 2;
   }
 
   function capitalizeType(type){
@@ -926,10 +825,11 @@ const PlacesProvider = (() => {
     return list.slice(0, -1).join(", ") + " och " + list[list.length - 1];
   }
 
-  // "Ikväll"-läget (middag/efterfest) bygger på ett "slot"-fält som Google
-  // inte har — vi gissar det grovt utifrån platstypen så det läget
+  // "Ikväll"-läget (förfest/middag/efterfest) bygger på ett "slot"-fält som
+  // Google inte har — vi gissar det grovt utifrån platstypen så det läget
   // fortsätter fungera med riktig data också.
   function guessSlot(primaryType){
+    if(["cafe","bakery"].includes(primaryType)) return "early";
     if(["bar","night_club","pub","wine_bar"].includes(primaryType)) return "late";
     return "main";
   }
@@ -958,40 +858,9 @@ const PlacesProvider = (() => {
     return extra.filter(t => !(p.tags || []).includes(t));
   }
 
-  // KOSTNADSOPTIMERING: en sökning med radie > GRID_SPLIT_RADIUS_KM kostar
-  // 7 st searchNearby-anrop (se buildSearchGrid), inte 1. Utan cache
-  // skulle varje tryck på "Sök igen" — eller att bara byta läge (t.ex.
-  // Nu → Dejt) utan att ändra plats/radie — betala för samma dyra
-  // rutnätssökning igen, trots att listan över restauranger i området
-  // rimligen inte hunnit ändras. Cachen återanvänder samma råa Google-
-  // träffar i CACHE_TTL_MS, och all sortering/poängsättning/variation
-  // ("Sök igen" känns ändå nytt tack vare jitter + seenNames-cykling)
-  // görs som vanligt varje gång — bara själva nätverksanropet till Google
-  // hoppas över.
-  const CACHE_TTL_MS = 10 * 60 * 1000; // 10 minuter
-  let cache = null; // { key, places, timestamp }
-
-  function cacheKeyFor(criteria){
-    if(!criteria.coords) return null;
-    // ~11 m precision — små GPS-svängningar mellan sökningar på samma
-    // plats ska fortfarande träffa cachen, men ett faktiskt platsbyte ska
-    // alltid trigga en ny sökning.
-    const lat = criteria.coords.lat.toFixed(4);
-    const lng = criteria.coords.lng.toFixed(4);
-    return `${lat},${lng}|${criteria.radiusKm}`;
-  }
-
   async function getPlaces(criteria){
-    const key = cacheKeyFor(criteria);
-    const now = Date.now();
-    let raw;
-    if(key && cache && cache.key === key && (now - cache.timestamp) < CACHE_TTL_MS){
-      raw = cache.places;
-    } else {
-      raw = CONFIG.USE_LIVE_DATA ? await fetchLive(criteria) : await fetchMock(criteria);
-      if(key) cache = { key, places: raw, timestamp: now };
-    }
-    return raw.map(p => ({ ...p, tags: [...(p.tags || []), ...deriveCapabilityTags(p)] }));
+    const places = CONFIG.USE_LIVE_DATA ? await fetchLive(criteria) : await fetchMock(criteria);
+    return places.map(p => ({ ...p, tags: [...(p.tags || []), ...deriveCapabilityTags(p)] }));
   }
 
   return { getPlaces };
@@ -1054,6 +923,24 @@ const CONTEXT_WEIGHTS = {
   general: { venue:0.18, cuisine:0.16, atmosphere:0.14, context:0.07, budget:0.15, adventure:0.09, conversation:0.04, distance:0.13, quality:0.04 }
 };
 
+// Ett uttalat val i den nya matfrågan ska väga BETYDLIGT mer än generella
+// attribut som betyg/popularitet — höjer cuisine-vikten (mer än dubbelt,
+// upp till 34%) och skalar ner resten PROPORTIONELLT mot varandra så
+// summan fortfarande blir exakt 1.0. Ren fritext-gissning (ingen uttalad
+// fråga besvarad) använder oförändrade CONTEXT_WEIGHTS som innan.
+function buildContextWeights(context, cuisineIsExplicit){
+  const base = CONTEXT_WEIGHTS[context] || CONTEXT_WEIGHTS.general;
+  if(!cuisineIsExplicit) return base;
+  const targetCuisine = Math.min(0.34, base.cuisine * 2.2);
+  const extra = targetCuisine - base.cuisine;
+  const othersSum = 1 - base.cuisine;
+  const boosted = {};
+  Object.keys(base).forEach(k => {
+    boosted[k] = k === 'cuisine' ? targetCuisine : base[k] - (base[k] / othersSum) * extra;
+  });
+  return boosted;
+}
+
 // Köksstil finns inte som ett rent Google-fält för de flesta ställen —
 // detekteras via nyckelord mot namn/typ/rå typlista/redaktionell text.
 // 0.75 (inte 1.0) markerar medvetet att det är en HÄRLEDD gissning, inte
@@ -1076,6 +963,33 @@ function detectCuisine(hay){
   });
   return found;
 }
+
+/* -------------------------------------------------------------------------
+   NY FRÅGA · "Vilken typ av mat är ni sugna på?"
+   Varje grupp mappas till FLERA av de befintliga CUISINE_KEYWORDS-nycklarna
+   ovan (inte en enda samlingstagg) — italienskt är en egen nyckel, medan
+   "Asiatiskt" t.ex. sprids ut till japansk/koreansk/kinesisk/thailändsk/
+   vietnamesisk var för sig, så en framtida personalisering fortfarande kan
+   lära sig skillnaden mellan t.ex. japanskt och koreanskt.
+   ------------------------------------------------------------------------- */
+const CUISINE_GROUPS = [
+  { id:'italian',       emoji:'🇮🇹', label:'Italienskt',                       desc:'Pasta, pizza, risotto',                          cuisines:['italiensk'] },
+  { id:'mediterranean', emoji:'🌍', label:'Medelhav & europeiskt',            desc:'Grekiskt, spanskt, franskt, Balkan',              cuisines:['grekisk','spansk','fransk'] },
+  { id:'middleeast',    emoji:'🧆', label:'Mellanöstern & turkiskt',          desc:'Turkiskt, libanesiskt, persiskt m.m.',           cuisines:['turkisk','mellanöstern'] },
+  { id:'asian',         emoji:'🍜', label:'Asiatiskt',                        desc:'Japanskt, koreanskt, kinesiskt, thailändskt, vietnamesiskt', cuisines:['japansk','koreansk','kinesisk','thailändsk','vietnamesisk'] },
+  { id:'latin',         emoji:'🌮', label:'Amerikanskt & latinamerikanskt',   desc:'Mexikanskt, amerikanskt, BBQ, latinamerikanskt', cuisines:['mexikansk','amerikansk'] }
+];
+const CUISINE_SURPRISE = { id:'surprise', emoji:'🎲', label:'Överraska mig', desc:'Hitta något ni sannolikt gillar men som ligger utanför era vanliga val.' };
+
+// Poolen "Överraska mig" väljer ifrån — medvetet UTAN italiensk/amerikansk/
+// nordisk (de mest konventionella/vanliga valen i Sverige), så förslaget
+// faktiskt hamnar utanför det vanliga istället för att råka landa där ändå.
+// Lägre vikt (0.5–0.7) än ett uttalat val (1.0) eftersom det är en nudge,
+// inte ett hårt krav — se buildUserProfile().
+const SURPRISE_CUISINES = {
+  turkisk:0.6, mellanöstern:0.7, koreansk:0.6, vietnamesisk:0.65,
+  thailändsk:0.55, grekisk:0.5, spansk:0.5, fransk:0.45, kinesisk:0.5, fisk_skaldjur:0.45
+};
 
 /* -------------------------------------------------------------------------
    VENUE CATEGORY
@@ -1149,6 +1063,32 @@ function buildUserProfile(state){
   if(state.vibeId === 'romantic' && context !== 'date') context = 'date';
   if(state.vibeId === 'social' && context === 'general') context = 'friends';
 
+  // Matpreferens (ny fråga): antingen upp till 2 valda grupper (var och en
+  // sprids ut till sina underliggande cuisine-nycklar, vikt 1.0 — ett
+  // uttalat val ska slå igenom TYDLIGT), eller ["surprise"] som istället
+  // ger en mjukare nudge mot en pool av mindre konventionella kök. Slås
+  // ihop med ev. köks-hintar ur den fritt skrivna vibe-texten (tar högsta
+  // vikten om båda råkar peka på samma kök).
+  const cuisineGroups = state.cuisineGroups || [];
+  const explicitCuisine = {};
+  let cuisineIsExplicit = false;
+  if(cuisineGroups.includes('surprise')){
+    Object.assign(explicitCuisine, SURPRISE_CUISINES);
+    cuisineIsExplicit = true;
+  } else {
+    cuisineGroups.forEach(gid => {
+      const group = CUISINE_GROUPS.find(g => g.id === gid);
+      if(!group) return;
+      group.cuisines.forEach(c => { explicitCuisine[c] = 1.0; });
+      cuisineIsExplicit = true;
+    });
+  }
+  const textCuisine = detectCuisine(state.customVibeText || "");
+  const cuisinePreferences = { ...textCuisine };
+  Object.entries(explicitCuisine).forEach(([c, w]) => {
+    cuisinePreferences[c] = Math.max(cuisinePreferences[c] || 0, w);
+  });
+
   return {
     context,
     mode: state.mode,
@@ -1158,7 +1098,11 @@ function buildUserProfile(state){
     adventure: adventure01,
     atmosphere,
     atmosphereWeights,
-    cuisinePreferences: detectCuisine(state.customVibeText || ""),
+    cuisinePreferences,
+    // Sant om preferensen kommer från den UTTALADE matfrågan (inte bara
+    // en gissning ur fritext) — används av buildContextWeights() för att
+    // väga cuisine betydligt tyngre än generella attribut som rating.
+    cuisineIsExplicit,
     vibeTags,
     favoriteTagWeights: getFavoriteTagWeights()
   };
@@ -1188,14 +1132,7 @@ function buildRestaurantProfile(p){
   const mk = (hit, value, conf) => hit ? { value, confidence: conf } : { value: 0.5, confidence: 0 };
   const atmosphere = {
     cozy:        mk(has("Mysigt","Avslappnat"), 0.8, 0.7),
-    // OBS: "Socialt" räknas INTE som bevis för livlig stämning. För riktig
-    // Google-data sätts "Socialt" bara från goodForGroups ("bra för
-    // grupper") — ett ställe kan vara utmärkt för stora sällskap och ändå
-    // ha en lugn/avslappnad atmosfär (precis det en användare rapporterade:
-    // matchymatchy påstod "livlig stämning" fast Google själva beskrev
-    // stället som "avslappnad"). "Socialt" är ett eget, giltigt bevis för
-    // suitableFor.friends nedan — men det bevisar inget om energinivå.
-    lively:      mk(has("Livlig stämning","Högt i tak"), 0.8, 0.7),
+    lively:      mk(has("Livlig stämning","Socialt","Högt i tak"), 0.8, 0.7),
     romantic:    mk(has("Romantiskt","Datevänligt"), 0.8, 0.7),
     quiet:       mk(has("Lugnt"), 0.75, 0.7),
     adventurous: (() => {
@@ -1238,11 +1175,6 @@ function buildRestaurantProfile(p){
     conversation,
     suitableFor,
     priceLevel: p.price,
-    // Mock-/gruppdata har alltid ett handplockat pris (ingen okänd-status
-    // finns i den formen), så priceKnown defaultar till true om fältet
-    // saknas — bara riktiga Google-träffar utan priceLevel sätter det
-    // uttryckligen till false (se fetchLive).
-    priceKnown: p.priceKnown !== false,
     rating: typeof p.rating === "number" ? p.rating : null,
     reviewCount: p.reviews || 0,
     capabilities: {
@@ -1263,22 +1195,14 @@ function buildRestaurantProfile(p){
 function applyHardFilters(rawPlaces, userProfile){
   let out = filterExcluded(rawPlaces); // "Inte för mig" — permanent, alltid hårt
 
-  // Vald prisnivå ska följas TYDLIGT, men det avgörs numera av en egen
-  // prioritetsnivå i sorteringen (se priceTier i scoreCandidate/
-  // compareByOpenThenScore) snarare än ett hårt filter här. Ett ställe med
-  // en VERIFIERAD prisnivå som inte matchar exakt är fortfarande ett giltigt
-  // (men lägst prioriterat) reservalternativ — bara om det inte finns
-  // tillräckligt många bättre matchningar (se kravspecen, punkt 2.3). Ett
-  // hårt filter här skulle permanent utesluta det scenariot helt.
-  // Obekräftad prisnivå (p.priceKnown===false) filtreras aldrig bort här av
-  // samma skäl som förut: den kan varken bekräftas matcha eller inte matcha.
+  // Strikt fel budget: 3 nivåer ifrån av 4 (t.ex. "€" mot "€€€€"). Allt
+  // inom det spannet hanteras av den mjuka budget-poängen i matchRestaurant.
+  out = out.filter(p => Math.abs(p.price - userProfile.pricePreference) < 3);
 
-  // Hela vald radie ska sökas (se buildSearchGrid i PlacesProvider), och
-  // resultat UTANFÖR den ska aldrig visas. Därför en hård gräns vid den
-  // faktiska radien (ett litet epsilon för flyttalsavrundning i Haversine/
-  // gridsökningen) — inte den tidigare lösa "dubbla radien plus 3 km"-
-  // gränsen, som kunde släppa igenom ställen långt utanför vald sträcka.
-  out = out.filter(p => p.dist <= userProfile.distancePreference + 0.05);
+  // För långt bort: den mjuka distansavtoningen sköter allt nära vald
+  // radie — det här är bara skyddet mot uppenbart orimligt avstånd.
+  const maxDist = userProfile.distancePreference * 2 + 3;
+  out = out.filter(p => p.dist <= maxDist);
 
   return out;
 }
@@ -1323,17 +1247,9 @@ function contextMatchScore(restaurant, userProfile){
 }
 
 function matchRestaurant(restaurant, userProfile){
-  const weights = CONTEXT_WEIGHTS[userProfile.context] || CONTEXT_WEIGHTS.general;
+  const weights = buildContextWeights(userProfile.context, userProfile.cuisineIsExplicit);
 
-  // Okänd prisnivå ska varken belönas eller straffas (0.5, neutralt). Ett
-  // bekräftat pris poängsätts efter hur nära det ligger vald budget — men
-  // den STRUKTURELLA prioriteten (matchande pris > obekräftat > icke-
-  // matchande) avgörs numera av priceTier i scoreCandidate/
-  // compareByOpenThenScore, inte av att applyHardFilters utesluter
-  // mismatchar helt (den gör den inte längre, se problem 1/2 i kravspecen).
-  const priceScore = restaurant.priceKnown === false
-    ? 0.5
-    : clamp01(1 - Math.abs(restaurant.priceLevel - userProfile.pricePreference) / 3);
+  const priceScore = clamp01(1 - Math.abs(restaurant.priceLevel - userProfile.pricePreference) / 3);
   const distScore = restaurant.location.distance <= userProfile.distancePreference
     ? 1
     : clamp01(1 - ((restaurant.location.distance - userProfile.distancePreference) / 3));
@@ -1423,17 +1339,6 @@ function scoreCandidate(rawPlace, userProfile){
   if(rawPlace.isChain) score *= 0.45;
   score = clamp01(score);
 
-  // Prisprioritet — se problem 1/2 i kravspecen: ett bekräftat pris som
-  // matchar budgeten ska ALLTID rankas före ett obekräftat pris, som i sin
-  // tur ALLTID ska rankas före ett bekräftat pris som INTE matchar. Det här
-  // är en STRUKTURELL prioritet (används av compareByOpenThenScore som ett
-  // eget sorteringssteg, likt öppet/stängt), inte bara en viktad poäng som
-  // andra faktorer (betyg, atmosfär) skulle kunna överrösta.
-  //   0 = bekräftad prisnivå som matchar vald budget exakt
-  //   1 = obekräftad prisnivå (varken bekräftat matchande eller ej — fallback)
-  //   2 = bekräftad prisnivå som INTE matchar (sista utväg)
-  const priceTier = !profile.priceKnown ? 1 : (profile.priceLevel === userProfile.pricePreference ? 0 : 2);
-
   const pct100 = (n) => Math.round(clamp01(n) * 100);
   const diagnostics = buildDiagnostics(profile, breakdown, weights);
 
@@ -1441,7 +1346,6 @@ function scoreCandidate(rawPlace, userProfile){
     console.log(`%c${rawPlace.name} → ${pct100(score)}%`, "font-weight:bold", {
       venueCategory: profile.venueCategory,
       intent: userProfile.intent,
-      priceTier,
       breakdown: Object.fromEntries(Object.entries(breakdown).map(([k,v]) => [k, pct100(v)])),
       weights,
       evidence: diagnostics.evidence,
@@ -1452,7 +1356,6 @@ function scoreCandidate(rawPlace, userProfile){
   return {
     ...rawPlace,
     score,
-    priceTier,
     matchScore: {
       totalScore: pct100(score),
       breakdown: {
@@ -1473,17 +1376,10 @@ function scoreCandidate(rawPlace, userProfile){
 // Öppna ställen (openNow===true ELLER null/okänt) ska ALLTID rankas före
 // stängda (openNow===false) — oavsett poäng. Bara om det inte finns några
 // öppna alls faller listan tillbaka på stängda ställen.
-// Näst efter det: priceTier (se scoreCandidate) — ett bekräftat, matchande
-// pris rankas alltid före ett obekräftat pris, som i sin tur alltid
-// rankas före ett bekräftat men icke-matchande pris. Bara inom SAMMA
-// öppet/stängt- och pris-nivå avgör den vanliga poängen ordningen.
 function compareByOpenThenScore(a, b){
   const aClosed = a.openNow === false;
   const bClosed = b.openNow === false;
   if(aClosed !== bClosed) return aClosed ? 1 : -1;
-  const aTier = a.priceTier ?? 1;
-  const bTier = b.priceTier ?? 1;
-  if(aTier !== bTier) return aTier - bTier;
   return b.score - a.score;
 }
 
@@ -1653,13 +1549,7 @@ function vibeDescriptor(p){
   const tags = p.tags || [];
   const has = (...list) => list.some(t => tags.includes(t));
   if(has("Lugnt", "Mysigt", "Avslappnat")) return "har en lugn, avslappnad känsla";
-  // "Socialt" (för riktig data: Googles goodForGroups) betyder "bra för
-  // sällskap", INTE "livlig/energisk atmosfär" — de är inte samma sak (se
-  // kommentaren i buildRestaurantProfile). Egen, ärlig gren istället för
-  // att felaktigt påstå livlig stämning på ett ställe Google själva kan
-  // beskriva som avslappnat.
-  if(has("Livlig stämning", "Högt i tak")) return "har en livlig stämning";
-  if(has("Socialt")) return "passar bra för sällskap";
+  if(has("Livlig stämning", "Socialt", "Högt i tak")) return "har en livlig stämning";
   if(has("Romantiskt", "Datevänligt")) return "har en romantisk känsla";
   if(has("Äventyrligt", "Hemlig entré")) return "sticker ut lite extra";
   if(has("Utsikt", "Havsnära")) return "har ett fint läge";
@@ -1690,52 +1580,10 @@ function favoriteAffinityScore(p, weights){
   return Math.min(1, hits / (max * 2));
 }
 
-// Spontant-läget har INGEN användarvald budget (computeSpontaneousMatches
-// slumpar fram ett internt värde bara för att ge matchningsmotorn något
-// att ranka mot — det är aldrig ett riktigt användarval). Beskrivningen
-// får därför aldrig påstå att stället "ligger nära budgeten", "matchar
-// budgeten" eller är "prisvärt i förhållande till" något användaren inte
-// valt. Bygger enbart på verifierad information om stället självt: dess
-// egna trait-text (redan antingen Googles editorialSummary eller en
-// sammanställning av verifierade fält som uteservering/alkohol/betyg —
-// se liveTrait i PlacesProvider, som ALDRIG hittar på information),
-// atmosfär/koncept via vibeDescriptor (som bara ger ett specifikt svar om
-// stället faktiskt har en tagg som styrker det, annars ett neutralt
-// "verkar vara ett bra val") och avstånd.
-function reasonForSpontaneous(p){
-  const distPart = `ligger ${p.dist.toFixed(1)} km bort`;
-  const vibePart = vibeDescriptor(p);
-  const traitPart = p.trait ? (p.traitStandalone ? ` ${p.trait}` : ` Känt för ${p.trait}.`) : "";
-  const favWeights = getFavoriteTagWeights();
-  const favHits = Object.keys(favWeights).length ? p.tags.filter(t => favWeights[t]) : [];
-  const favPart = favHits.length ? ` Liknar ställen ni sparat som favoriter tidigare (${favHits.slice(0,2).join(", ")}).` : "";
-  const sentence = `${vibePart.charAt(0).toUpperCase()+vibePart.slice(1)} och ${distPart}.`;
-  return sentence + traitPart + favPart;
-}
-
 function reasonFor(p, state){
-  // Spontant har ingen budget att beskriva — se reasonForSpontaneous ovan.
-  if(state.mode === 'spontaneous') return reasonForSpontaneous(p);
-
   const parts = [];
-  // Påstå ALDRIG en budgetmatchning på ett ställe vars prisnivå Google
-  // inte gett oss (p.priceKnown===false) — se problem 1/4 i kravspecen.
-  // Skriv neutralt istället för att gissa. p.priceTier (satt av
-  // scoreCandidate) speglar den STRUKTURELLA prioriteten exakt:
-  //   0 = bekräftad, matchande prisnivå → beskriv som en träff
-  //   1 = obekräftad prisnivå (priceKnown===false) → beskriv neutralt
-  //   2 = bekräftad prisnivå som INTE matchar, visas bara som sista
-  //       utväg när inget bättre finns (se selectTopMatches) → måste
-  //       beskrivas TYDLIGT som utanför budget, aldrig som "nära" eller
-  //       antyda en matchning som inte finns.
-  if(p.priceKnown === false){
-    parts.push("prisnivå inte bekräftad av Google");
-  } else if(p.priceTier === 0){
-    parts.push("ligger i er valda prisnivå");
-  } else {
-    parts.push("ligger utanför er valda budget, men inga bättre budgetmatchningar hittades i närheten");
-  }
-  parts.push(p.dist<=state.radius ? `${p.dist.toFixed(1)} km bort` : `${p.dist.toFixed(1)} km bort, strax utanför er radie`);
+  parts.push(Math.abs(p.price-state.budget)===0 ? "träffar er budget rakt av" : "ligger nära er budget");
+  parts.push(p.dist<=state.radius ? `bara ${p.dist.toFixed(1)} km bort` : `${p.dist.toFixed(1)} km bort, strax utanför er radie`);
   parts.push(vibeDescriptor(p));
   const traitPart = p.trait ? (p.traitStandalone ? ` ${p.trait}` : ` Känt för ${p.trait}.`) : "";
   const vibeHits = state.vibeTags && state.vibeTags.length ? p.tags.filter(t => state.vibeTags.includes(t)) : [];
@@ -1812,14 +1660,15 @@ const state = {
   mode: 'home',
   step: 0,
   budget: null, budgetAmount: 300, radius: 3, adventure: 3, coords: null,
-  people: [],                         // "Med vänner": alla i sällskapet, inkl. dig själv
+  people: [],                         // "Med vänner": tillagda personer
+  groupDraft: { budget: null, adventure: null }, // "Med vänner": person som håller på att läggas till
   groupSize: 0,
   showFavorites: false,
   showAccount: false,
-  // Vilken flik som är aktiv i den kombinerade "Gillade | Uteslutna"-vyn
-  // (renderSavedPlaces) — samma vy och samma lagringsmekanism
-  // (localStorage) används oavsett om man är inloggad eller inte.
-  savedTab: 'favorites',
+  showExcluded: false,
+  // Ny fråga · Mat: upp till 2 valda matgrupper, eller ["surprise"] ensamt.
+  // Se CUISINE_GROUPS/buildUserProfile() för hur det viktas in i matchningen.
+  cuisineGroups: [],
   // Steg 4 · Vibe: antingen en förvald preset ("preset") eller en egen
   // text som tolkats av analyzeVibeText() ("custom"). vibeTags används av
   // Matching Engine (buildUserProfile/CONTEXT_WEIGHTS) för att vikta matchningarna.
@@ -1906,19 +1755,13 @@ function isFavorite(name){ return getFavorites().some(f => f.name === name); }
 function toggleFavorite(place){
   const list = getFavorites();
   const idx = list.findIndex(f => f.name === place.name);
-  if(idx >= 0){
-    list.splice(idx, 1);
-  } else {
-    list.push({
-      name: place.name, type: place.type, tags: place.tags || [], trait: place.trait || '',
-      lat: typeof place.lat === "number" ? place.lat : null,
-      lng: typeof place.lng === "number" ? place.lng : null,
-      placeId: place.placeId || null
-    });
-    // En restaurang ska aldrig kunna vara både gillad och utesluten
-    // samtidigt — att gilla den tar bort den ur uteslutna-listan.
-    unexcludePlace(place.name);
-  }
+  if(idx >= 0) list.splice(idx, 1);
+  else list.push({
+    name: place.name, type: place.type, tags: place.tags || [], trait: place.trait || '',
+    lat: typeof place.lat === "number" ? place.lat : null,
+    lng: typeof place.lng === "number" ? place.lng : null,
+    placeId: place.placeId || null
+  });
   saveFavorites(list);
   return idx < 0; // true om den precis lades till
 }
@@ -1944,19 +1787,11 @@ function saveExcluded(list){
   syncToCloud();
 }
 function isExcludedName(name){ return getExcluded().some(x => x.name === name); }
-// Sparas lokalt (localStorage) precis som favoriter — fungerar identiskt
-// oavsett om man är inloggad eller inte, och synkas till molnet också om
-// man råkar vara inloggad (syncToCloud, via saveExcluded). En restaurang
-// ska aldrig kunna vara både gillad och utesluten samtidigt — att
-// utesluta den tar bort den ur favoritlistan.
 function excludePlace(place){
   if(isExcludedName(place.name)) return;
   const list = getExcluded();
   list.push({ name: place.name, type: place.type || '', excludedAt: new Date().toISOString() });
   saveExcluded(list);
-  if(isFavorite(place.name)){
-    saveFavorites(getFavorites().filter(f => f.name !== place.name));
-  }
 }
 function unexcludePlace(name){
   saveExcluded(getExcluded().filter(x => x.name !== name));
@@ -2024,7 +1859,7 @@ async function handleAuthChange(user){
         if(typeof cloud.prefs.radius === 'number') state.radius = Math.min(20, Math.max(0.5, cloud.prefs.radius));
         if(typeof cloud.prefs.adventure === 'number') state.adventure = cloud.prefs.adventure;
       }
-      if(state.showFavorites) renderSavedPlaces();
+      if(state.showFavorites) renderFavorites();
     } else {
       // Första inloggningen på det här kontot — spara det som redan finns
       // lokalt som en utgångspunkt i molnet.
@@ -2102,6 +1937,17 @@ function formatMemberSince(dateStr){
   }catch(e){ return null; }
 }
 
+function exportUserData(){
+  const data = { favoriter: getFavorites(), uteslutna: getExcluded(), installningar: getPrefs(), exporterad: new Date().toISOString() };
+  const blob = new Blob([JSON.stringify(data, null, 2)], { type: 'application/json' });
+  const url = URL.createObjectURL(blob);
+  const a = document.createElement('a');
+  a.href = url;
+  a.download = 'matchymatchy-mina-data.json';
+  a.click();
+  URL.revokeObjectURL(url);
+}
+
 function resetPrefsToDefault(){
   try{ localStorage.removeItem(PREFS_KEY); }catch(e){}
   state.budget = null;
@@ -2166,6 +2012,7 @@ function renderAccount(){
     <div class="account-actions">
       <button class="btn btn-primary" id="viewFavsBtn">Visa sparade restauranger</button>
       <button class="btn btn-ghost" id="viewExcludedBtn">Hantera uteslutna restauranger${excluded.length ? ` (${excluded.length})` : ''}</button>
+      <button class="btn btn-ghost" id="exportDataBtn">Exportera mina data</button>
       <button class="btn btn-ghost" id="resetPrefsBtn">Återställ standardval</button>
       <button class="btn btn-ghost" id="signOutBtn" style="color: var(--danger);">Logga ut</button>
     </div>
@@ -2174,15 +2021,14 @@ function renderAccount(){
   document.getElementById('viewFavsBtn').addEventListener('click', () => {
     state.showAccount = false;
     state.showFavorites = true;
-    state.savedTab = 'favorites';
     render();
   });
   document.getElementById('viewExcludedBtn').addEventListener('click', () => {
     state.showAccount = false;
-    state.showFavorites = true;
-    state.savedTab = 'excluded';
+    state.showExcluded = true;
     render();
   });
+  document.getElementById('exportDataBtn').addEventListener('click', exportUserData);
   document.getElementById('resetPrefsBtn').addEventListener('click', resetPrefsToDefault);
   document.getElementById('signOutBtn').addEventListener('click', () => {
     if(confirm('Logga ut från matchymatchy?')){
@@ -2200,42 +2046,57 @@ function renderAccount(){
   el.card.appendChild(closeBtn);
 }
 
-// Gillade och uteslutna restauranger visas nu i SAMMA vy, som två flikar
-// bredvid varandra (återanvänder .mode-tabs/.mode-tab-stilen som redan
-// finns för lägesvalet överst på sidan — ingen ny CSS behövs). Båda
-// listorna lagras på precis samma sätt (localStorage, se FAVORITES_KEY/
-// EXCLUDED_KEY) och fungerar identiskt oavsett om man är inloggad eller
-// inte — vyn nås direkt via hjärt-knappen i toppen, som redan var
-// tillgänglig utan inloggning.
-function renderSavedPlaces(){
+function renderFavorites(){
   el.modeTabs.style.display = 'none';
   el.steps.style.display = 'none';
   el.dataNote.textContent = '';
   el.card.style.minHeight = 'auto';
-
   const favorites = getFavorites();
-  const excluded = getExcluded();
-  const tab = state.savedTab === 'excluded' ? 'excluded' : 'favorites';
 
-  el.card.innerHTML = `
-    <div class="eyebrow">Sparade restauranger</div>
-    <div class="mode-tabs" id="savedTabs" style="display:flex;">
-      <button class="mode-tab${tab==='favorites' ? ' active' : ''}" data-tab="favorites" type="button">Gillade${favorites.length ? ` (${favorites.length})` : ''}</button>
-      <button class="mode-tab${tab==='excluded' ? ' active' : ''}" data-tab="excluded" type="button">Uteslutna${excluded.length ? ` (${excluded.length})` : ''}</button>
-    </div>
-    <div id="savedTabBody"></div>
-  `;
-  el.card.querySelectorAll('#savedTabs .mode-tab').forEach(btn => {
-    btn.addEventListener('click', () => {
-      if(btn.dataset.tab === state.savedTab) return;
-      state.savedTab = btn.dataset.tab;
-      renderSavedPlaces();
+  if(favorites.length === 0){
+    el.card.innerHTML = `
+      <div class="eyebrow">Favoriter</div>
+      <h1>Inga sparade <em>restauranger än</em></h1>
+      <p class="fav-empty">Tryck på hjärtat på ett förslag för att spara det här.</p>
+    `;
+  } else {
+    el.card.innerHTML = `
+      <div class="eyebrow">Favoriter</div>
+      <h1>Era <em>${favorites.length === 1 ? 'sparade restaurang' : 'sparade restauranger'}</em></h1>
+    `;
+    const frag = document.createDocumentFragment();
+    favorites.forEach(f => {
+      const item = document.createElement('div');
+      item.className = 'fav-list-item clickable';
+      item.tabIndex = 0;
+      item.setAttribute('role', 'button');
+      item.setAttribute('aria-label', `Öppna ${f.name} i Google Maps`);
+      item.innerHTML = `
+        <div><div class="fli-name">${f.name}</div><div class="fli-type">${f.type}</div></div>
+        <button class="fav-btn active" data-remove="${f.name}" aria-label="Ta bort favorit">♥</button>
+      `;
+      const openMaps = () => window.open(mapsUrlFor(f), '_blank', 'noopener');
+      item.addEventListener('click', (e) => {
+        if(e.target.closest('[data-remove]')) return;
+        openMaps();
+      });
+      item.addEventListener('keydown', (e) => {
+        if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-remove]')){
+          e.preventDefault();
+          openMaps();
+        }
+      });
+      frag.appendChild(item);
     });
-  });
-
-  const body = document.getElementById('savedTabBody');
-  if(tab === 'favorites') renderFavoritesTabBody(body, favorites);
-  else renderExcludedTabBody(body, excluded);
+    el.card.appendChild(frag);
+    el.card.querySelectorAll('[data-remove]').forEach(btn => {
+      btn.addEventListener('click', (e) => {
+        e.stopPropagation();
+        saveFavorites(getFavorites().filter(f => f.name !== btn.dataset.remove));
+        renderFavorites();
+      });
+    });
+  }
 
   const closeBtn = document.createElement('button');
   closeBtn.className = 'btn btn-ghost';
@@ -2245,87 +2106,57 @@ function renderSavedPlaces(){
   el.card.appendChild(closeBtn);
 }
 
-function renderFavoritesTabBody(body, favorites){
-  if(favorites.length === 0){
-    body.innerHTML = `
-      <h1 style="margin-top:16px;">Inga sparade <em>restauranger än</em></h1>
-      <p class="fav-empty">Tryck på hjärtat på ett förslag för att spara det här.</p>
-    `;
-    return;
-  }
-  body.innerHTML = `<h1 style="margin-top:16px;">Era <em>${favorites.length === 1 ? 'sparade restaurang' : 'sparade restauranger'}</em></h1>`;
-  const frag = document.createDocumentFragment();
-  favorites.forEach(f => {
-    const item = document.createElement('div');
-    item.className = 'fav-list-item clickable';
-    item.tabIndex = 0;
-    item.setAttribute('role', 'button');
-    item.setAttribute('aria-label', `Öppna ${f.name} i Google Maps`);
-    item.innerHTML = `
-      <div><div class="fli-name">${f.name}</div><div class="fli-type">${f.type}</div></div>
-      <button class="fav-btn active" data-remove="${f.name}" aria-label="Ta bort favorit">♥</button>
-    `;
-    const openMaps = () => window.open(mapsUrlFor(f), '_blank', 'noopener');
-    item.addEventListener('click', (e) => {
-      if(e.target.closest('[data-remove]')) return;
-      openMaps();
-    });
-    item.addEventListener('keydown', (e) => {
-      if((e.key === 'Enter' || e.key === ' ') && !e.target.closest('[data-remove]')){
-        e.preventDefault();
-        openMaps();
-      }
-    });
-    frag.appendChild(item);
-  });
-  body.appendChild(frag);
-  body.querySelectorAll('[data-remove]').forEach(btn => {
-    btn.addEventListener('click', (e) => {
-      e.stopPropagation();
-      saveFavorites(getFavorites().filter(f => f.name !== btn.dataset.remove));
-      renderSavedPlaces();
-    });
-  });
-}
-
 // "Inte för mig" är tänkt som permanent, men allt kan bli fel-tryckt — den
-// här fliken är enda sättet att ångra: en enkel lista med "Ta tillbaka"
-// per ställe, precis som favoriter fast tvärtom. Sparas och läses på
-// exakt samma sätt som favoriter (localStorage, se EXCLUDED_KEY) — även
-// för utloggade användare, och överlever siduppdatering av samma skäl.
-function renderExcludedTabBody(body, excluded){
+// här vyn är enda sättet att ångra: en enkel lista med "Ta tillbaka" per
+// ställe, precis som favoriter fast tvärtom.
+function renderExcluded(){
+  el.modeTabs.style.display = 'none';
+  el.steps.style.display = 'none';
+  el.dataNote.textContent = '';
+  el.card.style.minHeight = 'auto';
+  const excluded = getExcluded();
+
   if(excluded.length === 0){
-    body.innerHTML = `
-      <h1 style="margin-top:16px;">Inga <em>uteslutna än</em></h1>
+    el.card.innerHTML = `
+      <div class="eyebrow">Uteslutna restauranger</div>
+      <h1>Inga <em>uteslutna än</em></h1>
       <p class="fav-empty">Tryck på "Inte för mig" på ett förslag för att aldrig se det igen.</p>
     `;
-    return;
-  }
-  body.innerHTML = `
-    <h1 style="margin-top:16px;">${excluded.length === 1 ? 'Ett' : excluded.length} <em>${excluded.length === 1 ? 'utesluten restaurang' : 'uteslutna restauranger'}</em></h1>
-    <p class="lead">De här föreslås aldrig längre. Tryck "Ta tillbaka" om något hamnat här av misstag.</p>
-  `;
-  const frag = document.createDocumentFragment();
-  excluded.forEach(x => {
-    const item = document.createElement('div');
-    item.className = 'fav-list-item';
-    item.innerHTML = `
-      <div><div class="fli-name">${x.name}</div><div class="fli-type">${x.type || ''}</div></div>
-      <button class="btn-ghost" style="width:auto; padding:8px 12px; font-size:12.5px;" data-restore="${x.name}">Ta tillbaka</button>
+  } else {
+    el.card.innerHTML = `
+      <div class="eyebrow">Uteslutna restauranger</div>
+      <h1>${excluded.length === 1 ? 'Ett' : excluded.length} <em>${excluded.length === 1 ? 'utesluten restaurang' : 'uteslutna restauranger'}</em></h1>
+      <p class="lead">De här föreslås aldrig längre. Tryck "Ta tillbaka" om något hamnat här av misstag.</p>
     `;
-    frag.appendChild(item);
-  });
-  body.appendChild(frag);
-  body.querySelectorAll('[data-restore]').forEach(btn => {
-    btn.addEventListener('click', () => {
-      unexcludePlace(btn.dataset.restore);
-      renderSavedPlaces();
+    const frag = document.createDocumentFragment();
+    excluded.forEach(x => {
+      const item = document.createElement('div');
+      item.className = 'fav-list-item';
+      item.innerHTML = `
+        <div><div class="fli-name">${x.name}</div><div class="fli-type">${x.type || ''}</div></div>
+        <button class="btn-ghost" style="width:auto; padding:8px 12px; font-size:12.5px;" data-restore="${x.name}">Ta tillbaka</button>
+      `;
+      frag.appendChild(item);
     });
-  });
+    el.card.appendChild(frag);
+    el.card.querySelectorAll('[data-restore]').forEach(btn => {
+      btn.addEventListener('click', () => {
+        unexcludePlace(btn.dataset.restore);
+        renderExcluded();
+      });
+    });
+  }
+
+  const closeBtn = document.createElement('button');
+  closeBtn.className = 'btn btn-ghost';
+  closeBtn.style.marginTop = '14px';
+  closeBtn.textContent = 'Stäng';
+  closeBtn.addEventListener('click', () => { state.showExcluded = false; render(); });
+  el.card.appendChild(closeBtn);
 }
 
 el.brandHome.addEventListener('click', goHome);
-el.favToggleBtn.addEventListener('click', () => { state.showFavorites = true; state.savedTab = 'favorites'; render(); });
+el.favToggleBtn.addEventListener('click', () => { state.showFavorites = true; render(); });
 el.accountBtn.addEventListener('click', toggleAccount);
 initFirebase();
 updateAccountUI();
@@ -2455,10 +2286,11 @@ function goHome(){
   state.step = 0;
   state.coords = null;
   state.people = [];
+  state.groupDraft = { budget: null, adventure: null };
   state.groupSize = 0;
   state.showFavorites = false;
   state.showAccount = false;
-  state.vibeSource = null; state.vibeId = null; state.vibeLabel = ''; state.vibeTags = []; state.customVibeText = '';
+  state.vibeSource = null; state.vibeId = null; state.vibeLabel = ''; state.vibeTags = []; state.customVibeText = ''; state.cuisineGroups = [];
   state.seenNames = [];
   el.card.style.minHeight = '380px';
   render();
@@ -2492,8 +2324,9 @@ function switchMode(mode){
   state.step = 0;
   state.coords = null;
   state.people = [];
+  state.groupDraft = { budget: null, adventure: null };
   state.groupSize = 0;
-  state.vibeSource = null; state.vibeId = null; state.vibeLabel = ''; state.vibeTags = []; state.customVibeText = '';
+  state.vibeSource = null; state.vibeId = null; state.vibeLabel = ''; state.vibeTags = []; state.customVibeText = ''; state.cuisineGroups = [];
   state.seenNames = [];
   el.card.style.minHeight = '380px';
   render();
@@ -2516,9 +2349,9 @@ function renderStepIndicator(total){
 
 const HOME_MODE_INFO = {
   now:         { emoji:"🎯", desc:"Snabbt quiz om budget, sträcka och stämning — tre matchningar på under en minut." },
-  tonight:     { emoji:"🌙", desc:"Samma quiz, men resultatet blir kvällen i två steg: middag och sedan ett bra ställe för efterfest." },
+  tonight:     { emoji:"🌙", desc:"Samma quiz, men resultatet blir en hel kväll: förfest, middag och efterfest." },
   spontaneous: { emoji:"🎲", desc:"Inga frågor. Ett tryck, så väljer vi åt er." },
-  group:       { emoji:"👯", desc:"Du är redan med — lägg till fler om ni är flera, så väger vi ihop allas smak till en matchning som passar hela bordet." },
+  group:       { emoji:"👯", desc:"Lägg till hela gänget så väger vi ihop allas smak till en matchning alla gillar." },
   date:        { emoji:"💕", desc:"Samma quiz, men vi viktar upp mysiga och romantiska restauranger — perfekt för två." }
 };
 
@@ -2567,8 +2400,12 @@ function render(){
     renderAccount();
     return;
   }
+  if(state.showExcluded){
+    renderExcluded();
+    return;
+  }
   if(state.showFavorites){
-    renderSavedPlaces();
+    renderFavorites();
     return;
   }
   if(state.mode === 'home'){
@@ -2881,28 +2718,73 @@ const BUDGET_TIERS = [
 // matchningen, som enbart bryr sig om state.budget (1–4).
 const BUDGET_TIER_AMOUNT = { 1:50, 2:150, 3:300, 4:500 };
 
-// Ikväll-lägets budget gäller PER STÄLLE (middag och efterfest bedöms
-// båda mot samma nivå var för sig i matchningsmotorn — se
-// computeEveningPlan/scoreCandidate) — inte en totalsumma för hela
-// kvällen. Det var tidigare otydligt eftersom samma "per person"-text
-// användes i alla lägen. "Nu"/"Spontant"/"Med vänner" föreslår en enda
-// restaurang, där "per person" redan är entydigt.
-function budgetLeadText(mode){
-  return mode === 'tonight'
-    ? "Välj ungefär hur mycket ni vill lägga per person och ställe — kvällen blir två stopp (middag, efterfest), och nivån gäller vart och ett av dem, inte hela kvällen."
-    : "Välj ungefär hur mycket ni vill lägga per person.";
-}
-function budgetTierSub(mode){
-  return mode === 'tonight' ? "per person, per ställe" : "per person";
+/* =========================================================================
+   NY FRÅGA · MAT
+   "Vilken typ av mat är ni sugna på?" — upp till 2 val bland de fem
+   matgrupperna, ELLER "Överraska mig" ensamt (de två är alltid ömsesidigt
+   uteslutande). Återanvänder samma .choice-kortstil som resten av quizet
+   (t.ex. renderVibe) istället för att införa en ny UI-komponent. Frågan är
+   frivillig — Nästa-knappen är alltid aktiv — så den aldrig blockerar
+   någon som inte bryr sig om köksstil.
+   ========================================================================= */
+function renderCuisine(){
+  const allOptions = [...CUISINE_GROUPS, CUISINE_SURPRISE];
+
+  el.card.innerHTML = `
+    <div class="eyebrow">Steg 2 · Mat</div>
+    <h1>Vilken typ av <em>mat</em> är ni sugna på?</h1>
+    <p class="lead">Valfritt — välj upp till 2, så hittar vi träffsäkrare förslag. Hoppa över om ni inte vet än.</p>
+    <div class="choices" id="cuisineList">
+      ${allOptions.map(g => `
+        <div class="choice${state.cuisineGroups.includes(g.id) ? ' selected':''}" tabindex="0" role="button" data-id="${g.id}">
+          <span>${g.emoji} ${g.label}</span><span class="tag">${g.desc}</span>
+        </div>`).join('')}
+    </div>
+    <div class="spacer"></div>
+    <button class="btn btn-primary" id="nextBtn">Fortsätt</button>
+  `;
+
+  const list = document.getElementById('cuisineList');
+  const nextBtn = document.getElementById('nextBtn');
+
+  function rerenderSelection(){
+    list.querySelectorAll('.choice').forEach(el2 => {
+      el2.classList.toggle('selected', state.cuisineGroups.includes(el2.dataset.id));
+    });
+  }
+
+  function toggle(id){
+    if(id === 'surprise'){
+      // "Överraska mig" utesluter alltid de vanliga valen och tvärtom.
+      state.cuisineGroups = state.cuisineGroups.includes('surprise') ? [] : ['surprise'];
+    } else {
+      let sel = state.cuisineGroups.filter(g => g !== 'surprise');
+      if(sel.includes(id)) sel = sel.filter(g => g !== id);
+      else if(sel.length < 2) sel = [...sel, id];
+      // Redan 2 valda och man klickar en tredje: ignorera klicket istället
+      // för att byta ut ett tidigare val användaren inte bad om att tappa.
+      state.cuisineGroups = sel;
+    }
+    rerenderSelection();
+  }
+
+  list.addEventListener('click', (e) => { const t = e.target.closest('.choice'); if(t) toggle(t.dataset.id); });
+  list.addEventListener('keydown', (e) => {
+    if((e.key === 'Enter' || e.key === ' ') && e.target.classList.contains('choice')){
+      e.preventDefault(); toggle(e.target.dataset.id);
+    }
+  });
+
+  nextBtn.addEventListener('click', () => { state.step++; render(); });
 }
 
 function renderBudget(){
   el.card.innerHTML = `
-    <div class="eyebrow">Steg 2 · Budget</div>
+    <div class="eyebrow">Steg 3 · Budget</div>
     <h1>Vad är er <em>budget</em>?</h1>
-    <p class="lead">${budgetLeadText(state.mode)}</p>
+    <p class="lead">Välj ungefär hur mycket ni vill lägga per person.</p>
     <div class="choices" id="budgetList">
-      ${BUDGET_TIERS.map(t => `<div class="choice${state.budget===t.v?' selected':''}" tabindex="0" role="button" data-v="${t.v}"><span>${t.label}</span><span class="tag">${budgetTierSub(state.mode)}</span></div>`).join('')}
+      ${BUDGET_TIERS.map(t => `<div class="choice${state.budget===t.v?' selected':''}" tabindex="0" role="button" data-v="${t.v}"><span>${t.label}</span><span class="tag">${t.sub}</span></div>`).join('')}
     </div>
     <div class="spacer"></div>
     <button class="btn btn-primary" id="nextBtn" ${state.budget ? '' : 'disabled'}>Nästa</button>
@@ -2951,7 +2833,7 @@ function radiusValueLabel(km){
 
 function renderRadius(){
   el.card.innerHTML = `
-    <div class="eyebrow">Steg 3 · Sträcka</div>
+    <div class="eyebrow">Steg 4 · Sträcka</div>
     <h1>Hur långt kan ni <em>tänkas gå?</em></h1>
     <p class="lead">Dra i reglaget för hur stort område vi ska scanna av. Öppna restauranger visas alltid före stängda.</p>
     <input type="range" min="${RADIUS_MIN}" max="${RADIUS_MAX}" step="0.5" value="${state.radius}" id="radiusRange" aria-label="Sökradie i kilometer">
@@ -3071,7 +2953,7 @@ function renderVibe(){
   const savedText = state.customVibeText ? state.customVibeText.replace(/"/g, '&quot;') : '';
 
   el.card.innerHTML = `
-    <div class="eyebrow">Steg 4 · Vibe</div>
+    <div class="eyebrow">Steg 5 · Vibe</div>
     <h1>Vilken <em>vibe</em> vill ni ha?</h1>
     <p class="lead">Välj sällskapets stämning för ikväll — eller skriv er egen så tolkar vi den och väger in den i sökningen.</p>
     <div class="choices" id="vibeList">
@@ -3231,9 +3113,7 @@ function renderResults(matches){
   const modeLead = {
     now: "Baserat på budget, avstånd och er vibe — här är vad matchymatchy hittade åt er.",
     spontaneous: "Vi slumpade fram budget, sträcka och stämning å era vägnar — här är vad vi hittade.",
-    group: state.groupSize > 1
-      ? `Vi vägde ihop smaken hos ${state.groupSize} personer och hittade det här.`
-      : "Här är vad vi hittade utifrån din smak — lägg till fler vänner nästa gång för en gemensam matchning.",
+    group: `Vi vägde ihop smaken hos ${state.groupSize || 1} ${state.groupSize === 1 ? 'person' : 'personer'} och hittade det här.`,
     date: "Vi viktade upp mysiga, romantiska restauranger — här är vad som passade bäst för er två."
   };
 
@@ -3260,7 +3140,7 @@ function renderResults(matches){
         </div>
       </div>
       <div class="result-why">${reasonFor(p, state)}</div>
-      <div class="chips">${p.tags.map(t => `<span class="chip">${t}</span>`).join('')}</div>
+      <div class="chips">${p.tags.map((t,i) => `<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
       ${ratingRow(p)}
       ${hoursBlockHtml(p)}
       <button type="button" class="maps-hint" aria-label="Öppna ${p.name} i Google Maps">📍 Öppna i Google Maps ↗</button>
@@ -3345,137 +3225,96 @@ async function computeSpontaneousMatches(state){
 
 /* =========================================================================
    LÄGE: MED VÄNNER
-   Varje person redigeras direkt i sitt eget kort — inget separat
-   "utkast"-steg att fylla i innan man kan lägga till nästa. Du är alltid
-   redan med (som "Du"), så det går att trycka sig vidare direkt utan att
-   röra något alls; att lägga till en vän är ETT tryck, och deras
-   budget/stämning justeras genom att trycka direkt på deras egna pills.
-   Snittet av allas val (avg) körs sedan genom samma computeMatches som
-   vanligt, precis som innan — bara sättet att SAMLA IN preferenserna är
-   nytt. Delar location- och radius-stegen med de andra lägena (se
-   FLOWS.group nedan) istället för att tyst hoppa över dem, så en sökning
-   för hela gänget faktiskt scannar rätt område precis som alla andra lägen.
+   Lägg till allas budget + stämning en i taget, vi räknar ut ett snitt
+   (kompromiss) och kör det snittet genom samma computeMatches som vanligt.
    ========================================================================= */
-const GROUP_BUDGET_OPTIONS = [{v:1,l:"€"},{v:2,l:"€€"},{v:3,l:"€€€"},{v:4,l:"€€€€"}];
-const GROUP_ADVENTURE_OPTIONS = [{v:1,l:"Säkert"},{v:3,l:"Lite nytt"},{v:5,l:"Överraska"}];
-
-// Ingen namnfråga (det vore ett extra steg för lite värde) — bara en
-// stabil, läsbar etikett per plats i listan. Du är alltid person 0.
-function personLabel(i){ return i === 0 ? "Du" : `Vän ${i + 1}`; }
-
-function personCardHtml(p, i){
-  return `<div class="person-card" data-idx="${i}">
-    <div class="person-head">
-      <span>${personLabel(i)}</span>
-      ${i > 0 ? `<span class="remove" data-remove="${i}">Ta bort</span>` : ''}
-    </div>
-    <div class="micro-label">Budget</div>
-    <div class="pill-row" data-role="budget" data-idx="${i}">
-      ${GROUP_BUDGET_OPTIONS.map(o => `<div class="pill${p.budget===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
-    </div>
-    <div class="micro-label">Stämning</div>
-    <div class="pill-row" data-role="adventure" data-idx="${i}">
-      ${GROUP_ADVENTURE_OPTIONS.map(o => `<div class="pill${p.adventure===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
-    </div>
+function peopleRowHtml(p, i){
+  return `<div class="people-row">
+    <div><div>${p.name}</div><div class="meta">${budgetLabelShort(p.budget)} · ${advLabelShort(p.adventure)}</div></div>
+    <span class="remove" data-remove="${i}">Ta bort</span>
   </div>`;
 }
+function budgetLabelShort(v){ return {1:"€",2:"€€",3:"€€€",4:"€€€€"}[v] || "–"; }
+function advLabelShort(v){ return {1:"Säkert",3:"Lite nytt",5:"Överraska"}[v] || "–"; }
 
 function renderGroupPeople(){
-  // Första gången man kommer hit i den här sökningen: du är redan med i
-  // sällskapet, förifylld med din senast sparade budget/stämning (eller
-  // ett neutralt mellanläge om det är första besöket). Det är det som gör
-  // det möjligt att trycka sig vidare direkt utan att fylla i något alls.
-  if(!state.people.length){
-    state.people.push({ budget: state.budget || 2, adventure: state.adventure || 3 });
-  }
-
+  const draft = state.groupDraft;
   el.card.innerHTML = `
-    <div class="eyebrow">Steg 2 · Sällskapet</div>
-    <h1>Hur äter <em>gänget</em>?</h1>
-    <p class="lead">Vi väger ihop allas budget och stämning till en matchning som passar hela bordet — inte bara en person. Du är redan med; lägg till fler om ni är flera.</p>
+    <div class="eyebrow">Med vänner</div>
+    <h1>Vilka är <em>med ikväll?</em></h1>
+    <p class="lead">Lägg till alla i gänget, en i taget — vi väger ihop allas smak till en gemensam matchning.</p>
 
-    <div id="peopleList">${state.people.map(personCardHtml).join('')}</div>
-    <button class="add-person-btn" id="addPersonBtn" type="button">+ Lägg till vän</button>
+    <div id="peopleList">
+      ${state.people.length ? state.people.map(peopleRowHtml).join('') : `<p class="people-empty">Ingen tillagd än.</p>`}
+    </div>
+
+    <div class="field-label">Ny person · budget</div>
+    <div class="pill-row" id="draftBudget">
+      ${[{v:1,l:"€"},{v:2,l:"€€"},{v:3,l:"€€€"},{v:4,l:"€€€€"}].map(o=>`<div class="pill${draft.budget===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
+    </div>
+    <div class="field-label">Stämning</div>
+    <div class="pill-row" id="draftAdv">
+      ${[{v:1,l:"Säkert"},{v:3,l:"Lite nytt"},{v:5,l:"Överraska"}].map(o=>`<div class="pill${draft.adventure===o.v?' selected':''}" data-v="${o.v}">${o.l}</div>`).join('')}
+    </div>
+    <button class="btn btn-ghost" id="addPersonBtn" style="border:1px solid var(--line); border-radius:12px; margin-top:8px;" ${draft.budget && draft.adventure ? '' : 'disabled'}>+ Lägg till person</button>
 
     <div class="spacer"></div>
-    <button class="btn btn-primary" id="groupNextBtn">Hitta matchningar för gänget</button>
+    <button class="btn btn-primary" id="groupNextBtn" ${state.people.length ? '' : 'disabled'}>Hitta matchningar för gänget</button>
   `;
 
-  el.card.querySelectorAll('#peopleList [data-remove]').forEach(btn => {
+  el.card.querySelectorAll('#peopleList [data-remove]').forEach(btn=>{
     btn.addEventListener('click', () => {
       state.people.splice(parseInt(btn.dataset.remove, 10), 1);
       render();
     });
   });
-  el.card.querySelectorAll('#peopleList .pill-row').forEach(row => {
-    const idx = parseInt(row.dataset.idx, 10);
-    const role = row.dataset.role; // "budget" eller "adventure"
-    row.querySelectorAll('.pill').forEach(pill => {
-      pill.addEventListener('click', () => {
-        state.people[idx][role] = parseInt(pill.dataset.v, 10);
-        render();
-      });
+  el.card.querySelectorAll('#draftBudget .pill').forEach(p=>{
+    p.addEventListener('click', () => { state.groupDraft.budget = parseInt(p.dataset.v, 10); render(); });
+  });
+  el.card.querySelectorAll('#draftAdv .pill').forEach(p=>{
+    p.addEventListener('click', () => { state.groupDraft.adventure = parseInt(p.dataset.v, 10); render(); });
+  });
+  const addBtn = document.getElementById('addPersonBtn');
+  if(addBtn){
+    addBtn.addEventListener('click', () => {
+      state.people.push({ name: `Person ${state.people.length+1}`, budget: state.groupDraft.budget, adventure: state.groupDraft.adventure });
+      state.groupDraft = { budget: null, adventure: null };
+      render();
     });
-  });
-  document.getElementById('addPersonBtn').addEventListener('click', () => {
-    // Ny vän startar med samma val som den senaste — oftast närmare vad
-    // gänget faktiskt vill ha än att alltid börja om på ett neutralt läge,
-    // och det går fortfarande snabbt att justera med ett par tryck.
-    const last = state.people[state.people.length - 1];
-    state.people.push({ budget: last.budget, adventure: last.adventure });
-    render();
-  });
-  document.getElementById('groupNextBtn').addEventListener('click', () => { state.step++; render(); });
+  }
+  const nextBtn = document.getElementById('groupNextBtn');
+  if(!nextBtn.disabled){
+    nextBtn.addEventListener('click', () => { state.step++; render(); });
+  }
 }
 
 async function computeGroupMatches(state){
-  const people = state.people.length ? state.people : [{ budget: state.budget || 2, adventure: state.adventure || 3 }];
+  const people = state.people.length ? state.people : [{ name:"Du", budget: state.budget || 2, adventure: state.adventure || 3 }];
   const avg = (key) => people.reduce((sum,p)=>sum+p[key],0) / people.length;
 
   state.budget = Math.min(4, Math.max(1, Math.round(avg('budget'))));
   state.adventure = Math.min(5, Math.max(1, Math.round(avg('adventure'))));
   state.budgetAmount = BUDGET_TIER_AMOUNT[state.budget];
+  state.radius = state.radius || 3;
   state.groupSize = people.length;
-  // Plats och radie samlas numera in av samma steg (renderLocation/
-  // renderRadius) som "Nu"/"Ikväll"/"Dejt" använder — se FLOWS.group. Ingen
-  // egen platslogik behövs längre här.
+  if(!state.coords) state.coords = await quickLocation();
+
   return computeMatches(state);
 }
 
 /* =========================================================================
    LÄGE: IKVÄLL
-   Samma quiz som "Nu", men resultatet blir en kväll i två steg
-   (middag → efterfest) istället för tre fristående alternativ.
+   Samma quiz som "Nu", men resultatet blir en kvällsplan i tre steg
+   (förfest → middag → efterfest) istället för tre fristående alternativ.
    ========================================================================= */
 
-// Varje stopp i kvällen har en tydlig roll — visas dels som en kort
-// undertext i planen, dels används i slotFitText() för att förklara VARFÖR
-// just den här platsen föreslogs för just det här stoppet (inte bara
-// pris/avstånd/vibe som reasonFor() redan täcker).
-const EVENING_SLOTS = [
-  { key:'main',  time:"19:30", label:"Middag",    hint:"kvällens huvudmåltid" },
-  { key:'late',  time:"22:00", label:"Efterfest", hint:"något att runda av kvällen med" }
-];
-
 // Ger ett plus i poängen om ett ställes kategori passar tidpunkten, men
-// UTESLUTER inte längre andra ställen helt. Tidigare krävde t.ex.
-// "efterfest" exakt en bar — fanns inget sådant inom radien blev den delen
-// av kvällsplanen bara tom. Nu får bästa tillgängliga ställe alltid en
-// plats i planen, med en bonus till det som passar bäst.
+// UTESLUTER inte längre andra ställen helt. Tidigare krävde t.ex. "förfest"
+// exakt ett café och "efterfest" exakt en bar — fanns inget sådant inom
+// radien blev den delen av kvällsplanen bara tom. Nu får bästa tillgängliga
+// ställe alltid en plats i planen, med en bonus till det som passar bäst.
 function slotBonus(p, slot){
   return p.slot === slot ? 0.35 : 0;
-}
-
-// Förklarar KOPPLINGEN mellan platsen och just det här stoppet i kvällen
-// — ett komplement till reasonFor() (som redan förklarar pris/avstånd/
-// vibe), inte en upprepning av den. Skriver aldrig ut något stället inte
-// faktiskt är: om det inte finns ett renodlat efterfest-ställe sägs det
-// ärligt att det får agera den rollen i brist på bättre.
-function slotFitText(p, slotKey, label){
-  const labelLower = label.toLowerCase();
-  return p.slot === slotKey
-    ? `Passar bra som ${labelLower} — den här typen av ställe brukar fungera för det.`
-    : `Får agera ${labelLower} ikväll, i brist på ett renodlat ${labelLower}-ställe i närheten — men bästa alternativet vi hittade.`;
 }
 
 async function computeEveningPlan(state){
@@ -3498,16 +3337,16 @@ async function computeEveningPlan(state){
     return pick;
   };
 
-  const plan = {};
-  EVENING_SLOTS.forEach(slot => {
-    plan[slot.key] = { time: slot.time, label: slot.label, slotKey: slot.key, hint: slot.hint, place: bestInSlot(slot.key) };
-  });
-  return plan;
+  return {
+    early: { time:"17:30", label:"Förfest", place: bestInSlot('early') },
+    main:  { time:"19:30", label:"Middag",  place: bestInSlot('main') },
+    late:  { time:"22:00", label:"Efterfest", place: bestInSlot('late') }
+  };
 }
 
 function renderEveningPlan(plan){
   el.card.style.minHeight = 'auto';
-  const items = [plan.main, plan.late].filter(s => s.place);
+  const items = [plan.early, plan.main, plan.late].filter(s => s.place);
 
   if(items.length === 0){
     el.card.innerHTML = `
@@ -3523,21 +3362,10 @@ function renderEveningPlan(plan){
     return;
   }
 
-  // Förtydligar exakt det som annars var oklart: budgeten som valdes i
-  // steg 2 gäller PER STÄLLE (samma nivå bedöms för middag och efterfest
-  // var för sig — se computeEveningPlan/scoreCandidate), inte en
-  // totalsumma. Den ungefärliga totalen räknas bara fram här för att ge
-  // en känsla för hela kvällens kostnad, den påverkar aldrig matchningen.
-  const perStopAmount = BUDGET_TIER_AMOUNT[state.budget];
-  const totalEstimate = perStopAmount * items.length;
-  const costNote = perStopAmount
-    ? `Er budget (~${perStopAmount} kr per person) gäller per ställe — räkna med runt ~${totalEstimate} kr per person för hela kvällen (${items.length} stopp).`
-    : "";
-
   el.card.innerHTML = `
     <div class="eyebrow">Klart</div>
     <h1>Er <em>kväll</em>, planerad</h1>
-    <p class="lead">Från middag till efterfest — var och en av de ${items.length} platserna nedan är vald för sin roll i kvällen och matchar er stämning och budget. ${costNote}</p>
+    <p class="lead">Från förfest till efterfest — tre restauranger som passar er stämning och budget ikväll.</p>
     <div class="timeline" id="timelineWrap"></div>
   `;
   const wrap = document.getElementById('timelineWrap');
@@ -3550,7 +3378,7 @@ function renderEveningPlan(plan){
       <div class="timeline-content">
         <div class="result-top" style="margin-bottom:0;">
           <div>
-            <div class="timeline-time">${item.time} · ${item.label}${item.hint ? ` — ${item.hint}` : ''}</div>
+            <div class="timeline-time">${item.time} · ${item.label}</div>
             <div class="result-name">${p.name}</div>
             <div class="result-type">${p.type}</div>
           </div>
@@ -3559,8 +3387,8 @@ function renderEveningPlan(plan){
             <button class="exclude-btn" data-exclude="${p.name}" aria-label="Inte för mig — visa aldrig igen" title="Inte för mig">✕</button>
           </div>
         </div>
-        <div class="result-why">${reasonFor(p, state)} ${slotFitText(p, item.slotKey, item.label)}</div>
-        <div class="chips">${p.tags.map(t => `<span class="chip">${t}</span>`).join('')}</div>
+        <div class="result-why">${reasonFor(p, state)}</div>
+        <div class="chips">${p.tags.map((t,i)=>`<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
         ${ratingRow(p)}
         ${hoursBlockHtml(p)}
         <button type="button" class="maps-hint" aria-label="Öppna ${p.name} i Google Maps">📍 Öppna i Google Maps ↗</button>
@@ -3624,7 +3452,7 @@ async function computeDateMatches(state){
    ========================================================================= */
 FLOWS = {
   now: {
-    steps: [renderLocation, renderBudget, renderRadius, renderVibe],
+    steps: [renderLocation, renderCuisine, renderBudget, renderRadius, renderVibe],
     matcher: computeMatches,
     resultRenderer: renderResults,
     loadingMessages: (s) => [
@@ -3635,14 +3463,14 @@ FLOWS = {
     ]
   },
   tonight: {
-    steps: [renderLocation, renderBudget, renderRadius, renderVibe],
+    steps: [renderLocation, renderCuisine, renderBudget, renderRadius, renderVibe],
     matcher: computeEveningPlan,
     resultRenderer: renderEveningPlan,
     loadingEyebrow: "Planerar",
     loadingTitle: "Bygger <em>kvällsplanen…</em>",
     loadingMessages: () => [
       "Kollar vad som är öppet ikväll…",
-      "Väljer middag och ett bra ställe för efterfest…",
+      "Väljer förfest, middag och efterfest…",
       "Sätter ihop rutten…",
       "Klar strax…"
     ]
@@ -3655,13 +3483,13 @@ FLOWS = {
     loadingMessages: () => ["Slumpar fram något bra…", "Dubbelkollar att det passar…", "Klart snart…"]
   },
   group: {
-    steps: [renderLocation, renderGroupPeople, renderRadius],
+    steps: [renderGroupPeople],
     matcher: computeGroupMatches,
     resultRenderer: renderResults,
-    loadingMessages: (s) => [`Analyserar platser inom ${formatKm(s.radius)}…`, "Väger ihop allas önskemål…", "Hittar en kompromiss alla gillar…", "Rankar bästa matchningarna…"]
+    loadingMessages: () => ["Väger ihop allas önskemål…", "Hittar en kompromiss alla gillar…", "Rankar bästa matchningarna…"]
   },
   date: {
-    steps: [renderLocation, renderBudget, renderRadius, renderVibe],
+    steps: [renderLocation, renderCuisine, renderBudget, renderRadius, renderVibe],
     matcher: computeDateMatches,
     resultRenderer: renderResults,
     loadingMessages: (s) => [
