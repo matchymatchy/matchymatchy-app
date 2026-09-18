@@ -949,11 +949,22 @@ const CUISINE_KEYWORDS = {
   italiensk:"italien,pizza,pasta,trattoria,osteria,italian", turkisk:"turkisk,turkiet,kebab,meze,anatol,turkish",
   japansk:"japan,sushi,ramen,izakaya,sashimi", thailändsk:"thai",
   kinesisk:"kines,kina,dim sum,sichuan,szechuan,chinese", indisk:"indisk,indien,curry,tandoori,biryani,indian",
-  mexikansk:"mexik,taco,burrito,tex-mex,mexican", grekisk:"grekisk,grekland,souvlaki,taverna,greek",
+  mexikansk:"mexik,taco,burrito,tex-mex,mexican", grekisk:"grekisk,grekland,souvlaki,taverna,greek,mediterranean,medelhav",
   spansk:"spansk,tapas,paella,spanish", fransk:"fransk,frankrike,bistro,brasserie,french",
-  mellanöstern:"libanes,mellanöstern,falafel,hummus,shawarma,lebanese", koreansk:"korean,korea,bibimbap",
+  mellanöstern:"libanes,mellanöstern,falafel,hummus,shawarma,lebanese,middle_eastern,middle eastern",
+  koreansk:"korean,korea,bibimbap",
   vietnamesisk:"vietnam,banh mi,pho", amerikansk:"amerikansk,burgare,hamburger,bbq,steakhouse,american",
-  fisk_skaldjur:"fisk,skaldjur,sjömat,ostron,seafood", nordisk:"svensk,nordisk,husmanskost,swedish,nordic"
+  fisk_skaldjur:"fisk,skaldjur,sjömat,ostron,seafood", nordisk:"svensk,nordisk,husmanskost,swedish,nordic",
+  // Tidigare saknade helt — utan dem kunde t.ex. en genuin peruansk eller
+  // persisk restaurang aldrig kännas igen, oavsett vad Google faktiskt
+  // sa om den, bara för att ingen nyckel letade efter rätt ord.
+  persisk:"persisk,persiskt,iransk,persian,iranian",
+  latinamerikansk:"latinamerikansk,peruansk,brasiliansk,argentinsk,colombiansk,venezuelansk,churrasco,latin american,peruvian,brazilian",
+  // Generisk "asiatisk" — fångar upp Googles egen bredare typ
+  // (asian_restaurant) när den inte specificerar VILKET asiatiskt kök,
+  // så sådana ställen inte osynliggörs för frågan "Asiatiskt" bara för
+  // att de saknar en mer specifik etikett.
+  asiatisk:"asiatisk,asiatiskt,asian_restaurant,asian restaurant"
 };
 function detectCuisine(hay){
   const lower = (hay || "").toLowerCase();
@@ -975,9 +986,9 @@ function detectCuisine(hay){
 const CUISINE_GROUPS = [
   { id:'italian',       emoji:'🇮🇹', label:'Italienskt',                       desc:'Pasta, pizza, risotto',                          cuisines:['italiensk'] },
   { id:'mediterranean', emoji:'🌍', label:'Medelhav & europeiskt',            desc:'Grekiskt, spanskt, franskt, Balkan',              cuisines:['grekisk','spansk','fransk'] },
-  { id:'middleeast',    emoji:'🧆', label:'Mellanöstern & turkiskt',          desc:'Turkiskt, libanesiskt, persiskt m.m.',           cuisines:['turkisk','mellanöstern'] },
-  { id:'asian',         emoji:'🍜', label:'Asiatiskt',                        desc:'Japanskt, koreanskt, kinesiskt, thailändskt, vietnamesiskt', cuisines:['japansk','koreansk','kinesisk','thailändsk','vietnamesisk'] },
-  { id:'latin',         emoji:'🌮', label:'Amerikanskt & latinamerikanskt',   desc:'Mexikanskt, amerikanskt, BBQ, latinamerikanskt', cuisines:['mexikansk','amerikansk'] }
+  { id:'middleeast',    emoji:'🧆', label:'Mellanöstern & turkiskt',          desc:'Turkiskt, libanesiskt, persiskt m.m.',           cuisines:['turkisk','mellanöstern','persisk'] },
+  { id:'asian',         emoji:'🍜', label:'Asiatiskt',                        desc:'Japanskt, koreanskt, kinesiskt, thailändskt, vietnamesiskt', cuisines:['japansk','koreansk','kinesisk','thailändsk','vietnamesisk','asiatisk'] },
+  { id:'latin',         emoji:'🌮', label:'Amerikanskt & latinamerikanskt',   desc:'Mexikanskt, amerikanskt, BBQ, latinamerikanskt', cuisines:['mexikansk','amerikansk','latinamerikansk'] }
 ];
 const CUISINE_SURPRISE = { id:'surprise', emoji:'🎲', label:'Överraska mig', desc:'Hitta något ni sannolikt gillar men som ligger utanför era vanliga val.' };
 
@@ -988,7 +999,8 @@ const CUISINE_SURPRISE = { id:'surprise', emoji:'🎲', label:'Överraska mig', 
 // inte ett hårt krav — se buildUserProfile().
 const SURPRISE_CUISINES = {
   turkisk:0.6, mellanöstern:0.7, koreansk:0.6, vietnamesisk:0.65,
-  thailändsk:0.55, grekisk:0.5, spansk:0.5, fransk:0.45, kinesisk:0.5, fisk_skaldjur:0.45
+  thailändsk:0.55, grekisk:0.5, spansk:0.5, fransk:0.45, kinesisk:0.5, fisk_skaldjur:0.45,
+  persisk:0.7, latinamerikansk:0.6
 };
 
 /* -------------------------------------------------------------------------
@@ -1210,13 +1222,36 @@ function applyHardFilters(rawPlaces, userProfile){
 /* -------------------------------------------------------------------------
    STEG 5/6 — MJUK POÄNGSÄTTNING + BREAKDOWN
    ------------------------------------------------------------------------- */
-function cuisineMatchScore(restaurantCuisine, userCuisinePrefs){
+// BUGGEN som gjorde att helt orelaterade restauranger dök upp: när en
+// restaurangs kök inte gick att avgöra (inga träffbara nyckelord i namn/
+// typ/beskrivning — vanligt för många Google-resultat) gav den här
+// funktionen 0.5, praktiskt taget samma som "ingen uttalad preferens
+// alls" (0.6). Ett UTTRYCKLIGT val i mat-frågan drunknade då i mängden:
+// restauranger vi inte visste NÅGOT om konkurrerade nästan jämnt med
+// riktiga träffar, eftersom skillnaden bara var 0.1 innan den tunga
+// cuisine-vikten ens räknades in.
+//
+// Nu: en riktig, bekräftad träff (0.9) särskiljs TYDLIGT från ett okänt
+// kök (0.32 om preferensen var uttalad — annars fortfarande neutralt 0.5)
+// och en bekräftad missmatch (0.15). Ordningen blir alltid Träff > Okänt
+// > Missmatch, med rejäl marginal i båda stegen.
+function cuisineMatchScore(restaurantCuisine, userCuisinePrefs, cuisineIsExplicit){
+  const uKeys = Object.keys(userCuisinePrefs || {});
+  if(!uKeys.length) return 0.6; // ingen uttalad preferens alls
+
   const rKeys = Object.keys(restaurantCuisine);
-  if(!rKeys.length) return 0.5; // okänd köksstil = neutralt, straffas inte
-  if(!Object.keys(userCuisinePrefs || {}).length) return 0.6; // ingen uttalad preferens
+  if(!rKeys.length){
+    // Okänt kök: att INTE veta är inte samma sak som att det passar. Med
+    // ett uttalat val ska det dra tydligt neråt (men mindre hårt än en
+    // bekräftad missmatch, eftersom stället FAKTISKT kan vara rätt — vi
+    // har bara ingen text som avslöjar det).
+    return cuisineIsExplicit ? 0.32 : 0.5;
+  }
+
   let best = 0;
   rKeys.forEach(c => { if(userCuisinePrefs[c]) best = Math.max(best, userCuisinePrefs[c] * restaurantCuisine[c]); });
-  return best || 0.35;
+  if(best > 0) return Math.min(1, best * 1.2); // bekräftad träff — förstärk något över råpoängen
+  return 0.15; // bekräftat ETT ANNAT kök än det efterfrågade — en riktig missmatch
 }
 
 // En dimension räknas bara in om ANVÄNDAREN brydde sig (uWeights[d] > 0)
@@ -1259,7 +1294,7 @@ function matchRestaurant(restaurant, userProfile){
   const advDiff = 1 - Math.abs(rAdv.value - userProfile.adventure);
   const adventureScore = rAdv.confidence > 0 ? clamp01(advDiff) : clamp01(0.5 + (advDiff - 0.5) * 0.3);
   const qualityScore = restaurant.rating != null ? clamp01((restaurant.rating - 3) / 2) : 0.5;
-  const cuisineScore = cuisineMatchScore(restaurant.cuisine, userProfile.cuisinePreferences);
+  const cuisineScore = cuisineMatchScore(restaurant.cuisine, userProfile.cuisinePreferences, userProfile.cuisineIsExplicit);
   const atmosphereScore = atmosphereMatchScore(restaurant.atmosphere, userProfile.atmosphere, userProfile.atmosphereWeights);
   const contextScore = contextMatchScore(restaurant, userProfile);
   const conversationScore = restaurant.conversation.confidence > 0 ? restaurant.conversation.value : 0.5;
