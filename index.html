@@ -828,35 +828,47 @@ const PlacesProvider = (() => {
   // den bästa källan — annars bygger vi en egen mening av det vi faktiskt
   // vet (typ, stämning, betyg) istället för att bara upprepa betyget om
   // och om igen på varje kort.
+  // Väljer ETT utmärkande, verifierat faktum om stället — inte en stapel av
+  // generiska attribut.
+  //
+  // PROBLEMET SOM ÅTGÄRDATS: Googles `goodForGroups` och `servesBeer/Wine/
+  // Cocktails` är sanna för nästan varenda restaurang och bar. Att alltid
+  // lista dem gjorde att i princip alla kort fick texten "…med servering av
+  // alkohol och bra för grupper" — sant, men helt intetsägande, och alla
+  // restauranger började kännas likadana. De används nu bara som absolut
+  // sista utväg, och aldrig två samtidigt.
+  //
+  // Prioritetsordning (första träffen vinner):
+  //   1. Googles egen editorialSummary — unik text om just DET HÄR stället
+  //   2. specifik kategori ("Libanesisk restaurang", "Vinbar") — hoppas
+  //      över om Google bara gav en generisk etikett som "Restaurang"
+  //   3. ovanliga, verifierade egenskaper (vegetariskt, uteservering)
+  //   4. anmärkningsvärt betyg (högt OCH väl belagt — inte en 5:a på 3 röster)
+  //   5. generiska attribut, ett enda, bara om inget annat finns
   function liveTrait(p, typeLabel, atmosphere){
     if(p.editorialSummary?.text){
       const text = p.editorialSummary.text.trim();
       return text.endsWith(".") ? text : text + ".";
     }
 
-    const bits = [];
-    if(atmosphere.outdoorSeating) bits.push("uteservering");
-    if(atmosphere.servesAlcohol) bits.push("servering av alkohol");
-    if(atmosphere.goodForGroups) bits.push("bra för grupper");
+    const label = (typeLabel || "").trim();
+    const isGenericLabel = !label || /^(restaurang|restaurant|bar|café|cafe|matställe)$/i.test(label);
+    if(!isGenericLabel) return capitalizeFirst(label) + ".";
 
-    const typePhrase = typeLabel ? typeLabel.toLowerCase() : "en restaurang";
-    const ratingClause = typeof p.rating === "number"
-      ? (p.userRatingCount
-          ? `${p.rating.toFixed(1)} i betyg på Google (${p.userRatingCount} recensioner)`
-          : `${p.rating.toFixed(1)} i betyg på Google`)
-      : "";
+    if(p.servesVegetarianFood) return "Har vegetariska alternativ på menyn.";
+    if(atmosphere.outdoorSeating) return "Har uteservering.";
 
-    let sentence;
-    if(bits.length && ratingClause){
-      sentence = `${capitalizeFirst(typePhrase)} med ${joinSv(bits)} — ${ratingClause}`;
-    } else if(bits.length){
-      sentence = `${capitalizeFirst(typePhrase)} med ${joinSv(bits)}`;
-    } else if(ratingClause){
-      sentence = `${capitalizeFirst(typePhrase)} med ${ratingClause}`;
-    } else {
-      sentence = capitalizeFirst(typePhrase);
+    if(typeof p.rating === "number" && p.rating >= 4.5 && (p.userRatingCount || 0) >= 100){
+      return `Högt betyg på Google — ${p.rating.toFixed(1)} av ${p.userRatingCount} recensioner.`;
     }
-    return sentence + ".";
+    if(typeof p.rating === "number" && (p.userRatingCount || 0) >= 30){
+      return `${p.rating.toFixed(1)} i betyg på Google (${p.userRatingCount} recensioner).`;
+    }
+
+    // Sista utvägen — ETT generiskt attribut, aldrig flera staplade.
+    if(atmosphere.goodForGroups) return "Bra för sällskap enligt Google.";
+    if(atmosphere.servesAlcohol) return "Serverar alkohol.";
+    return label ? capitalizeFirst(label) + "." : "";
   }
 
   // capitalizeFirst() lever i global scope (definieras längre ner i filen)
@@ -1215,7 +1227,11 @@ function buildRestaurantProfile(p){
   const mk = (hit, value, conf) => hit ? { value, confidence: conf } : { value: 0.5, confidence: 0 };
   const atmosphere = {
     cozy:        mk(has("Mysigt","Avslappnat"), 0.8, 0.7),
-    lively:      mk(has("Livlig stämning","Socialt","Högt i tak"), 0.8, 0.7),
+    // "Socialt" (Googles goodForGroups) är INTE en stämningssignal — den
+    // är satt på nästan alla restauranger och betyder bara att sällskap
+    // får plats. Att räkna den som "livlig" gjorde att i princip varje
+    // ställe såg livligt ut för matchningsmotorn.
+    lively:      mk(has("Livlig stämning","Högt i tak"), 0.8, 0.7),
     romantic:    mk(has("Romantiskt","Datevänligt"), 0.8, 0.7),
     quiet:       mk(has("Lugnt"), 0.75, 0.7),
     adventurous: (() => {
@@ -1709,16 +1725,47 @@ function mapsUrlFor(p){
 // meningslös för riktig Google-data (se adv:3-kommentaren i scorePlace)
 // och sa därför inte något sant om just det här stället, bara en
 // slumpmässig sanning eftersom skalan nästan alltid råkade träffa.
+// Taggar som Google sätter på nästan allt ("Socialt" = goodForGroups,
+// "Alkohol" = servesBeer/Wine/Cocktails, "Mat"/"Fika" = härledda ur
+// kategorin). De är sanna, men säger inget om just DEN HÄR restaurangen —
+// därför används de aldrig som stämningspåstående, vibe-träff eller som
+// första chip. De filtreras inte bort helt: de visas sist bland chipsen,
+// där de fungerar som ren faktainfo.
+const GENERIC_TAGS = new Set(["Socialt", "Alkohol", "Mat", "Fika"]);
+
+// Sorterar om ett ställes taggar så det UTMÄRKANDE visas först och de
+// närmast universella hamnar sist. Utan detta inleddes varje kort med
+// samma två-tre chips.
+function displayTags(p, max = 5){
+  const tags = p.tags || [];
+  const specific = tags.filter(t => !GENERIC_TAGS.has(t));
+  const generic = tags.filter(t => GENERIC_TAGS.has(t));
+  return [...specific, ...generic].slice(0, max);
+}
+
 function vibeDescriptor(p){
   const tags = p.tags || [];
   const has = (...list) => list.some(t => tags.includes(t));
+
+  // VIKTIGT: "Socialt" kommer från Googles `goodForGroups`, som är satt på
+  // nästan varenda restaurang. Den betyder "det får plats ett sällskap här"
+  // — INTE att stället är livligt eller högljutt. Tidigare låg den i samma
+  // gren som "Livlig stämning", vilket gjorde att praktiskt taget varje kort
+  // påstod "har en livlig stämning". Nu ger bara faktiska stämningssignaler
+  // ett stämningspåstående.
+  if(has("Livlig stämning", "Högt i tak")) return "har en livlig stämning";
   if(has("Lugnt", "Mysigt", "Avslappnat")) return "har en lugn, avslappnad känsla";
-  if(has("Livlig stämning", "Socialt", "Högt i tak")) return "har en livlig stämning";
   if(has("Romantiskt", "Datevänligt")) return "har en romantisk känsla";
   if(has("Äventyrligt", "Hemlig entré")) return "sticker ut lite extra";
   if(has("Utsikt", "Havsnära")) return "har ett fint läge";
-  if(typeof p.rating === "number" && p.rating >= 4.5) return "är ovanligt omtyckt (högt betyg)";
-  return "verkar vara ett bra val";
+  // Uteservering/livemusik hanteras av liveTrait (faktarutan) — de togs
+  // bort härifrån för att slippa dubbleringar som
+  // "…och har uteservering. Har uteservering."
+
+  // Vet vi inget om stämningen säger vi INGET om den. Tidigare returnerades
+  // "verkar vara ett bra val" här, vilket klistrades på varje kort utan att
+  // betyda något. null gör att reasonFor hoppar över hela satsen istället.
+  return null;
 }
 
 // Bygger en enkel smakprofil utifrån VILKA TAGGAR man faktiskt sparat som
@@ -1744,18 +1791,46 @@ function favoriteAffinityScore(p, weights){
   return Math.min(1, hits / (max * 2));
 }
 
+// Naturlig avståndsformulering. Tidigare stod det tekniskt "strax utanför
+// er radie" så fort ett ställe låg utanför den valda sträckan — det läser
+// som ett felmeddelande snarare än en rekommendation. Nu förklaras det på
+// samma sätt som en människa hade sagt det, och det framgår VARFÖR stället
+// ändå visas: närmare fanns helt enkelt inget som matchade.
+function distanceClause(p, state){
+  const km = p.dist.toFixed(1).replace(".", ",");
+  if(p.dist <= state.radius) return `bara ${km} km bort`;
+  const over = p.dist - state.radius;
+  if(over <= 1) return `${km} km bort, precis i utkanten av området ni valde`;
+  if(over <= 4) return `${km} km bort — en bit längre än ni tänkt er, men närmare fanns inget som matchade`;
+  return `${km} km bort, en bra bit bort — men det var det som matchade er bäst`;
+}
+
 function reasonFor(p, state){
-  const parts = [];
-  parts.push(Math.abs(p.price-state.budget)===0 ? "träffar er budget rakt av" : "ligger nära er budget");
-  parts.push(p.dist<=state.radius ? `bara ${p.dist.toFixed(1)} km bort` : `${p.dist.toFixed(1)} km bort, strax utanför er radie`);
-  parts.push(vibeDescriptor(p));
+  const priceBit = Math.abs(p.price - state.budget) === 0 ? "träffar er budget rakt av" : "ligger nära er budget";
+  const distBit = distanceClause(p, state);
+
+  // vibeDescriptor kan nu returnera null (ingen känd stämning) — då hoppas
+  // satsen över helt istället för att fyllas med en intetsägande fras.
+  const vibeDesc = vibeDescriptor(p);
+  let sentence = vibeDesc
+    ? `${capitalizeFirst(priceBit)}, ${distBit} och ${vibeDesc}.`
+    : `${capitalizeFirst(priceBit)} och ${distBit}.`;
+
   const traitPart = p.trait ? (p.traitStandalone ? ` ${p.trait}` : ` Känt för ${p.trait}.`) : "";
-  const vibeHits = state.vibeTags && state.vibeTags.length ? p.tags.filter(t => state.vibeTags.includes(t)) : [];
-  const vibePart = vibeHits.length ? ` Matchar er vibe (${vibeHits.join(", ")}).` : "";
+
+  // Bara vibe-taggar som säger något om STÄMNINGEN räknas som en vibe-träff.
+  // "Socialt"/"Mat"/"Alkohol" är närmast universella och gjorde att nästan
+  // varje kort påstod sig matcha er vibe.
+  const vibeHits = state.vibeTags && state.vibeTags.length
+    ? p.tags.filter(t => state.vibeTags.includes(t) && !GENERIC_TAGS.has(t))
+    : [];
+  const vibePart = vibeHits.length ? ` Matchar er vibe (${vibeHits.slice(0,2).join(", ")}).` : "";
+
   const favWeights = getFavoriteTagWeights();
-  const favHits = Object.keys(favWeights).length ? p.tags.filter(t => favWeights[t]) : [];
+  const favHits = Object.keys(favWeights).length ? p.tags.filter(t => favWeights[t] && !GENERIC_TAGS.has(t)) : [];
   const favPart = favHits.length ? ` Liknar ställen ni sparat som favoriter tidigare (${favHits.slice(0,2).join(", ")}).` : "";
-  return `${parts[0].charAt(0).toUpperCase()+parts[0].slice(1)}, ${parts[1]} och ${parts[2]}.${traitPart}${vibePart}${favPart}`;
+
+  return sentence + traitPart + vibePart + favPart;
 }
 
 // Plockar ut de N bästa ur en redan poängsatt+sorterad lista, men hoppar
@@ -3332,7 +3407,7 @@ function renderResults(matches){
         </div>
       </div>
       <div class="result-why">${reasonFor(p, state)}</div>
-      <div class="chips">${p.tags.map((t,i) => `<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
+      <div class="chips">${displayTags(p).map((t,i) => `<span class="chip ${i===0?'mint':''}">${t}</span>`).join('')}</div>
       ${ratingRow(p)}
       ${hoursBlockHtml(p)}
       <button type="button" class="maps-hint" aria-label="Öppna ${p.name} i Google Maps">📍 Öppna i Google Maps ↗</button>
@@ -3581,7 +3656,7 @@ function renderEveningPlan(plan){
           </div>
         </div>
         <div class="result-why">${reasonFor(p, state)}</div>
-        <div class="chips">${p.tags.map((t,i)=>`<span class="chip ${i===1?'mint':''}">${t}</span>`).join('')}</div>
+        <div class="chips">${displayTags(p).map((t,i)=>`<span class="chip ${i===0?'mint':''}">${t}</span>`).join('')}</div>
         ${ratingRow(p)}
         ${hoursBlockHtml(p)}
         <button type="button" class="maps-hint" aria-label="Öppna ${p.name} i Google Maps">📍 Öppna i Google Maps ↗</button>
