@@ -569,7 +569,7 @@ const FIREBASE_ENABLED = !!CONFIG.FIREBASE.apiKey;
 const PlacesProvider = (() => {
 
   // "slot" används bara av kvällsplans-läget (Ikväll) för att bygga en
-  // rutt från förfest till efterfest. "rating"/"reviews" är exempeldata som
+  // rutt från middag till efterfest. "rating"/"reviews" är exempeldata som
   // visas som ett litet recensionsbetyg på varje kort — se kommentaren vid
   // fetchLive() för hur det byts mot riktiga recensioner (t.ex. Google
   // Places har ett "rating"-fält redan inritat där).
@@ -580,7 +580,7 @@ const PlacesProvider = (() => {
     {name:"Grus & Grönt", type:"Vegetariskt kök", price:2, dist:1.1, adv:2, tags:["Hälsosamt","Lugnt"], trait:"en meny som byggs helt efter dagens skörd", slot:"main", rating:4.7, reviews:96, openNow:true},
     {name:"Kajplats 4", type:"Fiskrestaurang · Hamnen", price:3, dist:3.2, adv:3, tags:["Romantiskt","Havsnära"], trait:"råvaror som kommer direkt från morgonens fångst", slot:"main", rating:4.5, reviews:220, openNow:true},
     {name:"Underjorden", type:"Speakeasy-bar", price:2, dist:2.0, adv:5, tags:["Hemlig entré","Äventyrligt"], trait:"en dold ingång bakom en gammal telefonkiosk", slot:"late", rating:4.9, reviews:143, openNow:true},
-    {name:"Smulan", type:"Bakverk & kaffe", price:1, dist:0.5, adv:1, tags:["Prisvärt","Avslappnat"], trait:"kanelbullar som säljer slut innan lunch", slot:"early", rating:4.3, reviews:267, openNow:false},
+    {name:"Smulan", type:"Bakverk & kaffe", price:1, dist:0.5, adv:1, tags:["Prisvärt","Avslappnat"], trait:"kanelbullar som säljer slut innan lunch", slot:"main", rating:4.3, reviews:267, openNow:false},
     {name:"Fabriken 7", type:"Industribar · Craft beer", price:2, dist:2.8, adv:4, tags:["Högt i tak","Socialt"], trait:"tolv fatöl som bryggs i lokalen bakom disken", slot:"late", rating:4.6, reviews:178, openNow:true}
   ];
 
@@ -895,11 +895,12 @@ const PlacesProvider = (() => {
     return list.slice(0, -1).join(", ") + " och " + list[list.length - 1];
   }
 
-  // "Ikväll"-läget (förfest/middag/efterfest) bygger på ett "slot"-fält som
-  // Google inte har — vi gissar det grovt utifrån platstypen så det läget
-  // fortsätter fungera med riktig data också.
+  // "Ikväll"-läget (middag/efterfest) bygger på ett "slot"-fält som Google
+  // inte har — vi gissar det grovt utifrån platstypen så det läget
+  // fortsätter fungera med riktig data också. Förfest är borttaget som
+  // eget stopp, så caféer/bagerier klassas nu som "main" precis som allt
+  // annat som inte uppenbart är ett sent bar-ställe.
   function guessSlot(primaryType){
-    if(["cafe","bakery"].includes(primaryType)) return "early";
     if(["bar","night_club","pub","wine_bar"].includes(primaryType)) return "late";
     return "main";
   }
@@ -1671,12 +1672,13 @@ function todayHoursLine(weekdayHours){
   return weekdayHours[isoIndex] || null;
 }
 
-// Avgör om ett ställe rimligen fortfarande är öppet vid en given klockslag
-// SENARE ikväll (t.ex. 22:00 för efterfesten). "openNow" (Googles fält)
-// räcker inte till det här — det säger bara om stället är öppet i det
-// ögonblick man söker, inte om det hunnit stänga innan man faktiskt kommer
-// dit. Det var precis det som gjorde att en efterfest-restaurang med
-// stängning 22:00 kunde föreslås till ett stopp klockan 22:00.
+// Avgör om ett ställe rimligen fortfarande kommer vara öppet ETT TAG efter
+// man kommer dit — inte bara i exakt det ögonblicket. "openNow" (Googles
+// fält) räcker inte till det här — det säger bara om stället är öppet när
+// man SÖKER, inte om det hinner stänga innan, eller strax efter, man
+// faktiskt kommer dit. minStayMinutes (default 90) kräver att stället
+// håller öppet minst så länge efter ankomsttiden — annars är det ingen
+// mening att gå dit för ett helt stopp i kvällsplanen.
 //
 // Bygger på Googles strukturerade periods (dag/timme/minut för varje
 // öppnings-/stängningstillfälle) — hanterar även ställen som stänger efter
@@ -1687,21 +1689,26 @@ function todayHoursLine(weekdayHours){
 // öppettider för stället) returneras true — okänt ska aldrig tolkas som
 // stängt, bara som "vi vet inte", precis som resten av appens
 // confidence-principer.
-function isOpenAtEveningSlot(p, hour, minute = 0){
+function isOpenAtEveningSlot(p, hour, minute = 0, minStayMinutes = 90){
   if(!Array.isArray(p.hoursPeriods) || !p.hoursPeriods.length) return true;
 
   const now = new Date();
   const todayJs = now.getDay(); // 0=sön..6=lör, samma som Googles "day"-fält i periods
-  const targetMinutes = hour * 60 + minute;
+  const arrivalMinutes = hour * 60 + minute;
+  // Kravet är inte bara "öppet när man kommer", utan "öppet minStayMinutes
+  // till" — annars kan ett ställe som stänger 15 min efter ankomst ändå
+  // föreslås, vilket i praktiken är samma problem som att föreslå ett redan
+  // stängt ställe.
+  const requiredOpenUntil = arrivalMinutes + minStayMinutes;
 
   return p.hoursPeriods.some(period => {
     if(!period.open) return false;
     const openDay = period.open.day;
     const openMinutes = (period.open.hour || 0) * 60 + (period.open.minute || 0);
 
-    // Öppnar stället EFTER klockslaget vi frågar om (och samma dag), kan
-    // det inte vara öppet då — oavsett stängningstid.
-    if(openDay === todayJs && openMinutes > targetMinutes) return false;
+    // Öppnar stället EFTER ankomsttiden (och samma dag), hinner man inte
+    // dit oavsett stängningstid/buffert.
+    if(openDay === todayJs && openMinutes > arrivalMinutes) return false;
 
     if(!period.close){
       // Inget stängningstillfälle angivet = öppet dygnet runt från
@@ -1714,17 +1721,17 @@ function isOpenAtEveningSlot(p, hour, minute = 0){
     const closeMinutes = (period.close.hour || 0) * 60 + (period.close.minute || 0);
 
     if(openDay === todayJs){
-      // Stänger senare samma dag — enkla fallet.
-      if(closeDay === openDay) return closeMinutes > targetMinutes;
-      // Stänger efter midnatt (nästa dag) — öppet ända till dess.
+      // Stänger senare samma dag — måste hålla öppet minStayMinutes till.
+      if(closeDay === openDay) return closeMinutes >= requiredOpenUntil;
+      // Stänger efter midnatt (nästa dag) — gott om marginal, alltid nog.
       return true;
     }
 
     // Öppnade GÅRDAGENS datum och stänger idag efter midnatt — täcker
-    // t.ex. "öppet till 02:00" som fortfarande gäller vid 22:00-frågan bara
-    // om stängningen faktiskt ligger efter targetMinutes idag.
+    // t.ex. "öppet till 02:00" som fortfarande gäller om det håller öppet
+    // minStayMinutes förbi ankomsttiden idag.
     if(openDay === (todayJs + 6) % 7 && closeDay === todayJs){
-      return closeMinutes > targetMinutes;
+      return closeMinutes >= requiredOpenUntil;
     }
 
     return false;
@@ -2691,7 +2698,7 @@ function renderStepIndicator(total){
 
 const HOME_MODE_INFO = {
   now:         { emoji:"🎯", desc:"Snabbt quiz om budget, sträcka och stämning — tre matchningar på under en minut." },
-  tonight:     { emoji:"🌙", desc:"Samma quiz, men resultatet blir en hel kväll: förfest, middag och efterfest." },
+  tonight:     { emoji:"🌙", desc:"Samma quiz, men resultatet blir middag och efterfest — två stopp som passar ihop." },
   spontaneous: { emoji:"🎲", desc:"Inga frågor. Ett tryck, så väljer vi åt er." },
   group:       { emoji:"👯", desc:"Lägg till hela gänget så väger vi ihop allas smak till en matchning alla gillar." },
   date:        { emoji:"💕", desc:"Samma quiz, men vi viktar upp mysiga och romantiska restauranger — perfekt för två." }
@@ -3646,15 +3653,16 @@ async function computeGroupMatches(state){
 
 /* =========================================================================
    LÄGE: IKVÄLL
-   Samma quiz som "Nu", men resultatet blir en kvällsplan i tre steg
-   (förfest → middag → efterfest) istället för tre fristående alternativ.
+   Samma quiz som "Nu", men resultatet blir en kvällsplan i två steg
+   (middag → efterfest) istället för tre fristående alternativ. Förfest
+   togs bort som eget stopp — kvällen är nu bara middag och efterfest.
    ========================================================================= */
 
 // Ger ett plus i poängen om ett ställes kategori passar tidpunkten, men
-// UTESLUTER inte längre andra ställen helt. Tidigare krävde t.ex. "förfest"
-// exakt ett café och "efterfest" exakt en bar — fanns inget sådant inom
-// radien blev den delen av kvällsplanen bara tom. Nu får bästa tillgängliga
-// ställe alltid en plats i planen, med en bonus till det som passar bäst.
+// UTESLUTER inte längre andra ställen helt. Tidigare krävde t.ex.
+// "efterfest" exakt en bar — fanns inget sådant inom radien blev den
+// delen av kvällsplanen bara tom. Nu får bästa tillgängliga ställe alltid
+// en plats i planen, med en bonus till det som passar bäst.
 function slotBonus(p, slot){
   return p.slot === slot ? 0.35 : 0;
 }
@@ -3669,14 +3677,15 @@ async function computeEveningPlan(state){
   const usedInPlan = new Set();
   // hour/minute för respektive stopp — matchar de klockslag som visas i
   // planen nedan. Ett ställe som med säkerhet (se isOpenAtEveningSlot)
-  // redan hunnit stänga vid det klockslaget plockas bort INNAN
-  // poängsättningen, så det aldrig kan föreslås för det stoppet.
-  const SLOT_TIMES = { early: [17, 30], main: [19, 30], late: [22, 0] };
+  // redan hunnit stänga, ELLER stänger inom 90 minuter efter ankomst,
+  // plockas bort INNAN poängsättningen — så det aldrig kan föreslås för
+  // ett stopp man knappt hinner sätta sig ner vid.
+  const SLOT_TIMES = { main: [19, 30], late: [22, 0] };
   const bestInSlot = (slot) => {
     const [hour, minute] = SLOT_TIMES[slot];
     const sorted = places
       .filter(p => !usedInPlan.has(p.name))
-      .filter(p => isOpenAtEveningSlot(p, hour, minute))
+      .filter(p => isOpenAtEveningSlot(p, hour, minute, 90))
       .map(p => {
         const scored = scoreCandidate(p, userProfile);
         return { ...scored, score: scored.score + slotBonus(p, slot) };
@@ -3688,7 +3697,6 @@ async function computeEveningPlan(state){
   };
 
   return {
-    early: { time:"17:30", label:"Förfest", place: bestInSlot('early') },
     main:  { time:"19:30", label:"Middag",  place: bestInSlot('main') },
     late:  { time:"22:00", label:"Efterfest", place: bestInSlot('late') }
   };
@@ -3696,7 +3704,7 @@ async function computeEveningPlan(state){
 
 function renderEveningPlan(plan){
   el.card.style.minHeight = 'auto';
-  const items = [plan.early, plan.main, plan.late].filter(s => s.place);
+  const items = [plan.main, plan.late].filter(s => s.place);
 
   if(items.length === 0){
     el.card.innerHTML = `
@@ -3715,7 +3723,7 @@ function renderEveningPlan(plan){
   el.card.innerHTML = `
     <div class="eyebrow">Klart</div>
     <h1>Er <em>kväll</em>, planerad</h1>
-    <p class="lead">Från förfest till efterfest — tre restauranger som passar er stämning och budget ikväll.</p>
+    <p class="lead">Middag och efterfest — två restauranger som passar er stämning och budget ikväll.</p>
     <div class="timeline" id="timelineWrap"></div>
   `;
   const wrap = document.getElementById('timelineWrap');
@@ -3820,7 +3828,7 @@ FLOWS = {
     loadingTitle: "Bygger <em>kvällsplanen…</em>",
     loadingMessages: () => [
       "Kollar vad som är öppet ikväll…",
-      "Väljer förfest, middag och efterfest…",
+      "Väljer middag och efterfest…",
       "Sätter ihop rutten…",
       "Klar strax…"
     ]
