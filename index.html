@@ -610,63 +610,119 @@ const PlacesProvider = (() => {
       return fetchMock(criteria);
     }
 
-    const body = {
+    // KANDIDATHÄMTNING — TVÅ KÄLLOR
+    // -----------------------------------------------------------------
+    // Tidigare gjordes EN enda searchNearby med maxResultCount 20. Det var
+    // grundorsaken till att ett uttalat köksval (t.ex. "Mellanöstern") inte
+    // syntes i resultatet: Google rankar sina 20 träffar efter PROMINENS
+    // inom hela cirkeln, så över t.ex. 20 km i Stockholm fylls listan av de
+    // mest välbesökta ställena — caféer och brunchställen — och en enda
+    // mellanösternrestaurang hann aldrig ens med i kandidatlistan. Ingen
+    // poängsättning i världen kan lyfta fram en restaurang som aldrig
+    // hämtades. Därför kompletteras närhetssökningen nu med RIKTADE
+    // textsökningar per valt kök (searchText), som frågar Google efter
+    // exakt den maträttstypen inom samma område.
+    const requests = [ searchNearbyRaw(criteria) ];
+    (criteria.cuisineQueries || []).forEach(q => requests.push(searchTextRaw(q, criteria)));
+
+    const settled = await Promise.allSettled(requests);
+    const failed = settled.filter(r => r.status === "rejected");
+    if(failed.length) console.warn(`matchymatchy: ${failed.length}/${settled.length} Places-anrop misslyckades`, failed.map(f => f.reason));
+    if(failed.length === settled.length) throw new Error("Places API-anrop misslyckades: samtliga sökningar gav fel");
+
+    // Deduplicera på placeId INNAN mappning — samma restaurang kan mycket
+    // väl komma tillbaka från både närhets- och kökssökningen.
+    const byPlaceId = new Map();
+    settled.forEach(r => {
+      if(r.status !== "fulfilled") return;
+      r.value.forEach(p => { if(p.id && !byPlaceId.has(p.id)) byPlaceId.set(p.id, p); });
+    });
+
+    return Array.from(byPlaceId.values())
+      .filter(p => !isWrongCategory(p))
+      .map(p => mapGooglePlace(p, criteria.coords));
+  }
+
+  // FieldMask styr vad ni betalar för — håll den snäv. Delas av båda
+  // sökningarna nedan.
+  // OBS: "places.types" är en oordnad lista — det är INTE samma sak som
+  // platsens huvudkategori. Vi hämtar "primaryType" separat eftersom det är
+  // fältet Google faktiskt avsett för kategorisering.
+  // "currentOpeningHours" ger öppet/stängt just nu (tar hänsyn till
+  // tillfälliga avvikelser, t.ex. helgdagar) — "regularOpeningHours" ger den
+  // vanliga veckoschematexten att visa i listan.
+  const PLACES_FIELD_MASK = "places.id,places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount,places.editorialSummary,places.outdoorSeating,places.goodForGroups,places.servesVegetarianFood,places.servesBeer,places.servesWine,places.servesCocktails,places.currentOpeningHours,places.regularOpeningHours";
+
+  const EXCLUDED_PRIMARY_TYPES = [
+    "fast_food_restaurant", "meal_takeaway", "meal_delivery",
+    "sandwich_shop", "food_court", "deli",
+    "lodging", "hostel", "hotel", "motel", "resort_hotel", "campground", "rv_park",
+    "gas_station", "convenience_store", "supermarket", "grocery_store",
+    "department_store", "shopping_mall", "market"
+  ];
+
+  async function placesPost(url, body){
+    const res = await fetch(url, {
+      method: "POST",
+      headers: {
+        "Content-Type": "application/json",
+        "X-Goog-Api-Key": CONFIG.GOOGLE_MAPS_API_KEY,
+        "X-Goog-FieldMask": PLACES_FIELD_MASK
+      },
+      body: JSON.stringify(body)
+    });
+    if(!res.ok) throw new Error("Places API-anrop misslyckades: " + res.status);
+    const data = await res.json();
+    return data.places || [];
+  }
+
+  // Bred närhetssökning — ger kandidater även när inget kök valts.
+  function searchNearbyRaw(criteria){
+    return placesPost("https://places.googleapis.com/v1/places:searchNearby", {
       // "includedTypes" matchar mot HELA platsens typ-lista, vilket är
-      // varför t.ex. en saluhall (en marknad som har "restaurant" som en
-      // av flera taggar, inte sin faktiska huvudkategori) kunde smyga sig
-      // in som förslag. "includedPrimaryTypes" matchar bara mot platsens
+      // varför t.ex. en saluhall (en marknad som har "restaurant" som en av
+      // flera taggar, inte sin faktiska huvudkategori) kunde smyga sig in
+      // som förslag. "includedPrimaryTypes" matchar bara mot platsens
       // FAKTISKA huvudkategori och är betydligt mer träffsäkert.
       includedPrimaryTypes: ["restaurant", "bar", "cafe"],
-      // Snabbmat, matbutiker, boenden och bensinmackar klassas av Google
-      // som egna primärtyper — utesluts helt här så de aldrig kan dyka upp
-      // som förslag, oavsett vad poängsättningen längre ner skulle landa i.
-      excludedPrimaryTypes: [
-        "fast_food_restaurant", "meal_takeaway", "meal_delivery",
-        "sandwich_shop", "food_court", "deli",
-        "lodging", "hostel", "hotel", "motel", "resort_hotel", "campground", "rv_park",
-        "gas_station", "convenience_store", "supermarket", "grocery_store",
-        "department_store", "shopping_mall", "market"
-      ],
+      excludedPrimaryTypes: EXCLUDED_PRIMARY_TYPES,
       maxResultCount: 20,
       languageCode: "sv",
       locationRestriction: {
         circle: {
           center: { latitude: criteria.coords.lat, longitude: criteria.coords.lng },
-          radius: criteria.radiusKm * 1000
+          radius: Math.min(criteria.radiusKm * 1000, 50000)
         }
       }
-    };
-
-    const res = await fetch("https://places.googleapis.com/v1/places:searchNearby", {
-      method: "POST",
-      headers: {
-        "Content-Type": "application/json",
-        "X-Goog-Api-Key": CONFIG.GOOGLE_MAPS_API_KEY,
-        // FieldMask styr vad ni betalar för — håll den snäv.
-        // OBS: "places.types" är en oordnad lista — det är INTE samma sak
-        // som platsens huvudkategori. Vi hämtar "primaryType" separat
-        // eftersom det är fältet Google faktiskt avsett för kategorisering
-        // (se kommentar vid tidigare bugg i guessSlot/capitalizeType nedan).
-        // "currentOpeningHours" ger öppet/stängt just nu (tar hänsyn till
-        // tillfälliga avvikelser, t.ex. helgdagar) — "regularOpeningHours"
-        // ger den vanliga veckoscheman-texten att visa i listan.
-        "X-Goog-FieldMask": "places.id,places.displayName,places.priceLevel,places.location,places.types,places.primaryType,places.primaryTypeDisplayName,places.rating,places.userRatingCount,places.editorialSummary,places.outdoorSeating,places.goodForGroups,places.servesVegetarianFood,places.servesBeer,places.servesWine,places.servesCocktails,places.currentOpeningHours,places.regularOpeningHours"
-      },
-      body: JSON.stringify(body)
     });
+  }
 
-    if(!res.ok) throw new Error("Places API-anrop misslyckades: " + res.status);
-    const data = await res.json();
+  // Riktad kökssökning. Det är DEN HÄR som faktiskt får fram t.ex.
+  // mellanösternrestauranger — searchText låter oss fråga Google efter
+  // maträttstypen i klartext istället för att hoppas att den råkar rymmas
+  // bland de 20 mest prominenta ställena i området. includedType begränsar
+  // till restauranger, så en kökssökning aldrig drar in caféer.
+  function searchTextRaw(query, criteria){
+    return placesPost("https://places.googleapis.com/v1/places:searchText", {
+      textQuery: query,
+      includedType: "restaurant",
+      maxResultCount: 20,
+      languageCode: "sv",
+      locationBias: {
+        circle: {
+          center: { latitude: criteria.coords.lat, longitude: criteria.coords.lng },
+          radius: Math.min(criteria.radiusKm * 1000, 50000)
+        }
+      }
+    });
+  }
 
-    // Mappa Google-formatet till appens interna plats-form.
-    return (data.places || [])
-      .filter(p => !isWrongCategory(p))
-      .map(p => {
+  // Mappar ETT Google-objekt till appens interna plats-form. Utbruten ur
+  // fetchLive så att båda sökkällorna ovan ger exakt samma form.
+  function mapGooglePlace(p, coords){
       // primaryType/primaryTypeDisplayName är Googles egna, avsedda fält för
       // "vad är det här stället egentligen" — till skillnad från "types",
       // som är en oordnad lista och INTE ska tolkas som types[0] = huvudtyp.
-      // (Det var den bakomliggande buggen till att t.ex. snabbmatsställen
-      // kunde hamna i fel kategori/tidslucka tidigare.)
       const typeLabel = p.primaryTypeDisplayName?.text || (p.primaryType ? capitalizeType(p.primaryType) : "");
       const servesAlcohol = !!(p.servesBeer || p.servesWine || p.servesCocktails);
       const extraTags = [];
@@ -678,12 +734,8 @@ const PlacesProvider = (() => {
         name: p.displayName?.text || "Okänd restaurang",
         type: typeLabel,
         price: mapGooglePriceLevel(p.priceLevel),
-        dist: haversineKm(criteria.coords, { lat: p.location.latitude, lng: p.location.longitude }),
-        // Google ger ingen "äventyrsnivå" för riktiga sökresultat. Tidigare
-        // stod det en HÅRDKODAD adv:3 här för ALLA live-träffar, som om det
-        // vore känd fakta — borttaget. buildRestaurantProfile() härleder nu
-        // adventure ärligt (tagg-signal om den finns, annars explicit okänt)
-        // istället för att låtsas veta något Google faktiskt inte ger oss.
+        priceKnown: isKnownGooglePriceLevel(p.priceLevel),
+        dist: haversineKm(coords, { lat: p.location.latitude, lng: p.location.longitude }),
         tags: typeLabel ? [typeLabel, ...extraTags] : extraTags,
         trait: liveTrait(p, typeLabel, { servesAlcohol, outdoorSeating: !!p.outdoorSeating, goodForGroups: !!p.goodForGroups }),
         traitStandalone: true,
@@ -693,35 +745,16 @@ const PlacesProvider = (() => {
         lat: p.location.latitude,
         lng: p.location.longitude,
         placeId: p.id || null,
-        // Rå typ-lista + ev. redaktionell text — används av
-        // buildRestaurantProfile()/detectCuisine()/detectVenueCategory() för
-        // att avgöra köksstil och venue-kategori, eftersom Google inte ger
-        // ett rent "cuisine"-fält för de flesta ställen. Kostar inget extra:
-        // båda hämtas redan via FieldMask.
         types: Array.isArray(p.types) ? p.types : [],
         editorialSummary: p.editorialSummary?.text || null,
-        // "openNow" tas från currentOpeningHours i första hand (tar hänsyn
-        // till tillfälliga avvikelser som helgdagar); faller tillbaka på
-        // regularOpeningHours om den saknas. null = Google gav ingen
-        // öppettidsdata alls, vilket UI:t visar ärligt istället för att gissa.
         openNow: typeof p.currentOpeningHours?.openNow === "boolean"
           ? p.currentOpeningHours.openNow
           : (typeof p.regularOpeningHours?.openNow === "boolean" ? p.regularOpeningHours.openNow : null),
-        // Sju rader, en per veckodag, redan formaterade av Google (på
-        // svenska tack vare languageCode i anropet) — används både för
-        // dagens rad och den expanderbara veckolistan i UI:t.
         weekdayHours: p.regularOpeningHours?.weekdayDescriptions || null,
-        // Flaggar snabbmatskedjor för Matching Engine istället för att
-        // plocka bort dem helt — de ska kunna dyka upp ibland, bara inte
-        // ofta eller högt rankade (se isQuickServiceChain nedan).
         isChain: isQuickServiceChain(p),
-        // Råa booleaner (utöver taggarna ovan) så kostfiltret och
-        // väderanpassningen kan filtrera/vikta exakt, istället för att
-        // behöva tolka fritext-taggar.
         servesVegetarianFood: !!p.servesVegetarianFood,
         outdoorSeating: !!p.outdoorSeating
       };
-    });
   }
 
   // Kategorier som ALDRIG är en rimlig träff på "restaurang/bar/café",
@@ -767,12 +800,22 @@ const PlacesProvider = (() => {
     return KNOWN_CHAIN_NAME_PATTERNS.some(re => re.test(name));
   }
 
+  // Fyra egna nivåer, en per Google-nivå — ingen ihopslagning.
+  const GOOGLE_PRICE_LEVEL_MAP = { PRICE_LEVEL_FREE:1, PRICE_LEVEL_INEXPENSIVE:1, PRICE_LEVEL_MODERATE:2, PRICE_LEVEL_EXPENSIVE:3, PRICE_LEVEL_VERY_EXPENSIVE:4 };
+
   function mapGooglePriceLevel(level){
-    // Fyra egna nivåer, en per Google-nivå — ingen ihopslagning längre.
-    // Tidigare hamnade "dyrt" och "väldigt dyrt" i samma bucket (3), vilket
-    // gjorde att budgetreglaget inte gick att lita på i den övre delen.
-    const map = { PRICE_LEVEL_FREE:1, PRICE_LEVEL_INEXPENSIVE:1, PRICE_LEVEL_MODERATE:2, PRICE_LEVEL_EXPENSIVE:3, PRICE_LEVEL_VERY_EXPENSIVE:4 };
-    return map[level] || 2;
+    // Fallbacken till 2 finns bara för att alltid ha ett NUMERISKT värde att
+    // räkna med — den får aldrig tolkas som en bekräftad "måttlig" prisnivå.
+    // Använd isKnownGooglePriceLevel() för att veta om priset faktiskt är
+    // verifierat av Google (se priceKnown/priceTier).
+    return GOOGLE_PRICE_LEVEL_MAP[level] || 2;
+  }
+
+  // true bara om Google faktiskt gav en av sina kända prisnivåer. Många
+  // restauranger saknar priceLevel helt — det ska aldrig räknas som en
+  // budgetträff, bara som "okänt".
+  function isKnownGooglePriceLevel(level){
+    return Object.prototype.hasOwnProperty.call(GOOGLE_PRICE_LEVEL_MAP, level);
   }
 
   function capitalizeType(type){
@@ -983,12 +1026,41 @@ function detectCuisine(hay){
    vietnamesisk var för sig, så en framtida personalisering fortfarande kan
    lära sig skillnaden mellan t.ex. japanskt och koreanskt.
    ------------------------------------------------------------------------- */
+// `queries` är sökfraser som skickas till Google Places TEXTSÖKNING (se
+// searchTextRaw i PlacesProvider). Det är de som faktiskt HÄMTAR IN rätt
+// restauranger — `cuisines` används först därefter, för att poängsätta och
+// rangordna det som hämtats. Utan queries kan ett köksval bara sortera om
+// de ~20 mest prominenta ställena i området, vilket i praktiken innebar
+// att t.ex. mellanösternrestauranger aldrig ens kom med som kandidater.
 const CUISINE_GROUPS = [
-  { id:'italian',       emoji:'🇮🇹', label:'Italienskt',                       desc:'Pasta, pizza, risotto',                          cuisines:['italiensk'] },
-  { id:'mediterranean', emoji:'🌍', label:'Medelhav & europeiskt',            desc:'Grekiskt, spanskt, franskt, Balkan',              cuisines:['grekisk','spansk','fransk'] },
-  { id:'middleeast',    emoji:'🧆', label:'Mellanöstern & turkiskt',          desc:'Turkiskt, libanesiskt, persiskt m.m.',           cuisines:['turkisk','mellanöstern','persisk'] },
-  { id:'asian',         emoji:'🍜', label:'Asiatiskt',                        desc:'Japanskt, koreanskt, kinesiskt, thailändskt, vietnamesiskt', cuisines:['japansk','koreansk','kinesisk','thailändsk','vietnamesisk','asiatisk'] }
+  { id:'italian',       emoji:'🇮🇹', label:'Italienskt',                       desc:'Pasta, pizza, risotto',                          cuisines:['italiensk'],
+    queries:['italiensk restaurang','pizzeria','trattoria'] },
+  { id:'mediterranean', emoji:'🌍', label:'Medelhav & europeiskt',            desc:'Grekiskt, spanskt, franskt, Balkan',              cuisines:['grekisk','spansk','fransk'],
+    queries:['grekisk restaurang','spansk restaurang tapas','fransk bistro','balkanrestaurang'] },
+  { id:'middleeast',    emoji:'🧆', label:'Mellanöstern & turkiskt',          desc:'Turkiskt, libanesiskt, persiskt m.m.',           cuisines:['turkisk','mellanöstern','persisk'],
+    queries:['mellanösternrestaurang','libanesisk restaurang','turkisk restaurang','persisk restaurang','syrisk restaurang'] },
+  { id:'asian',         emoji:'🍜', label:'Asiatiskt',                        desc:'Japanskt, koreanskt, kinesiskt, thailändskt, vietnamesiskt', cuisines:['japansk','koreansk','kinesisk','thailändsk','vietnamesisk','asiatisk'],
+    queries:['japansk restaurang','koreansk restaurang','kinesisk restaurang','thailändsk restaurang','vietnamesisk restaurang'] }
 ];
+
+// Poolen som "Överraska mig" hämtar kandidater ifrån — samma princip som
+// grupperna ovan, fast utan att användaren pekat ut ett kök själv.
+const SURPRISE_QUERIES = ['turkisk restaurang','libanesisk restaurang','koreansk restaurang','vietnamesisk restaurang','persisk restaurang','grekisk restaurang'];
+
+// Vilka textsökningar som ska köras för användarens val. Begränsas till 6
+// stycken: varje fråga är ett eget (betalt) Places-anrop, och sex täcker
+// redan alla nuvarande grupper med marginal.
+function cuisineQueriesFor(state){
+  const groups = state.cuisineGroups || [];
+  if(!groups.length) return [];
+  if(groups.includes('surprise')) return SURPRISE_QUERIES.slice(0, 6);
+  const out = [];
+  groups.forEach(gid => {
+    const g = CUISINE_GROUPS.find(x => x.id === gid);
+    (g && g.queries ? g.queries : []).forEach(q => { if(!out.includes(q)) out.push(q); });
+  });
+  return out.slice(0, 6);
+}
 const CUISINE_SURPRISE = { id:'surprise', emoji:'🎲', label:'Överraska mig', desc:'Hitta något ni sannolikt gillar men som ligger utanför era vanliga val.' };
 
 // Poolen "Överraska mig" väljer ifrån — medvetet UTAN italiensk/amerikansk/
@@ -1186,6 +1258,8 @@ function buildRestaurantProfile(p){
     conversation,
     suitableFor,
     priceLevel: p.price,
+    // Mockdata saknar fältet helt — då räknas priset som känt, som förut.
+    priceKnown: p.priceKnown !== false,
     rating: typeof p.rating === "number" ? p.rating : null,
     reviewCount: p.reviews || 0,
     capabilities: {
@@ -1214,6 +1288,22 @@ function applyHardFilters(rawPlaces, userProfile){
   // radie — det här är bara skyddet mot uppenbart orimligt avstånd.
   const maxDist = userProfile.distancePreference * 2 + 3;
   out = out.filter(p => p.dist <= maxDist);
+
+  // Har användaren uttryckligen valt en TYP AV MAT och är ute efter en
+  // måltid, är ett café eller brunchställe inte ett rimligt svar — oavsett
+  // hur bra betyg det har. Det var precis det som hände tidigare: caféer
+  // fick hög totalpoäng på betyg/närhet och trängde undan riktiga
+  // restauranger. Venue-vikten (0.30 för café vid måltid) var för mjuk för
+  // att stoppa det, så här blir det ett hårt filter i stället — men BARA
+  // när ett kök faktiskt valts, så "fika"-flödet påverkas inte.
+  if(userProfile.cuisineIsExplicit && userProfile.intent === 'meal'){
+    const before = out.length;
+    const onlyRestaurants = out.filter(p => detectVenueCategory(p) !== 'cafe');
+    // Skyddsnät: om filtret skulle tömma listan helt (litet område, inga
+    // restauranger alls) är det bättre att visa något än ingenting.
+    if(onlyRestaurants.length) out = onlyRestaurants;
+    else console.warn(`matchymatchy: café-filtret hade tömt listan (${before} kandidater) — behåller dem.`);
+  }
 
   return out;
 }
@@ -1373,6 +1463,32 @@ function scoreCandidate(rawPlace, userProfile){
   if(rawPlace.isChain) score *= 0.45;
   score = clamp01(score);
 
+  // STRUKTURELL PRIORITET — kök och pris går FÖRE allt annat.
+  // En viktad poäng räcker inte: även med hög cuisine-vikt kan ett café med
+  // toppbetyg, nära läge och perfekt pris samla ihop mer totalpoäng än en
+  // mellanösternrestaurang lite längre bort. Därför avgörs ordningen först
+  // av dessa två "tiers" (se compareByOpenThenScore), och först därefter av
+  // den viktade poängen.
+  //   cuisineTier: 0 = bekräftad träff på valt kök
+  //                1 = okänt kök (kan vara rätt, vi vet bara inte)
+  //                2 = bekräftat ANNAT kök än det valda
+  // Utan ett uttalat köksval är alla 0 — då ska köket inte styra ordningen.
+  const rCuisines = Object.keys(profile.cuisine || {});
+  const uCuisines = Object.keys(userProfile.cuisinePreferences || {});
+  let cuisineTier = 0;
+  if(userProfile.cuisineIsExplicit && uCuisines.length){
+    if(rCuisines.some(c => userProfile.cuisinePreferences[c])) cuisineTier = 0;
+    else if(!rCuisines.length) cuisineTier = 1;
+    else cuisineTier = 2;
+  }
+  //   priceTier: 0 = bekräftat pris inom budget, 1 = okänt pris,
+  //              2 = bekräftat pris utanför budget
+  const priceTier = !profile.priceKnown
+    ? 1
+    : (userProfile.context === 'friends'
+        ? (profile.priceLevel <= userProfile.pricePreference ? 0 : 2)
+        : (Math.abs(profile.priceLevel - userProfile.pricePreference) <= 1 ? 0 : 2));
+
   const pct100 = (n) => Math.round(clamp01(n) * 100);
   const diagnostics = buildDiagnostics(profile, breakdown, weights);
 
@@ -1390,6 +1506,8 @@ function scoreCandidate(rawPlace, userProfile){
   return {
     ...rawPlace,
     score,
+    cuisineTier,
+    priceTier,
     matchScore: {
       totalScore: pct100(score),
       breakdown: {
@@ -1411,9 +1529,21 @@ function scoreCandidate(rawPlace, userProfile){
 // stängda (openNow===false) — oavsett poäng. Bara om det inte finns några
 // öppna alls faller listan tillbaka på stängda ställen.
 function compareByOpenThenScore(a, b){
+  // Ordningen på stegen ÄR prioriteringen:
+  //   1. öppet före stängt
+  //   2. rätt kök före okänt kök före fel kök   ← nytt
+  //   3. rätt pris före okänt pris före fel pris ← nytt
+  //   4. därefter den viktade matchningspoängen
   const aClosed = a.openNow === false;
   const bClosed = b.openNow === false;
   if(aClosed !== bClosed) return aClosed ? 1 : -1;
+
+  const aC = a.cuisineTier ?? 0, bC = b.cuisineTier ?? 0;
+  if(aC !== bC) return aC - bC;
+
+  const aP = a.priceTier ?? 0, bP = b.priceTier ?? 0;
+  if(aP !== bP) return aP - bP;
+
   return b.score - a.score;
 }
 
@@ -1655,8 +1785,16 @@ function pickUnseen(sortedPlaces, state, n = 3){
 const MATCH_QUALITY_FLOOR_RATIO = 0.55;
 function selectTopMatches(sortedPlaces, state, n = 3){
   if(!sortedPlaces.length) return [];
-  const floor = sortedPlaces[0].score * MATCH_QUALITY_FLOOR_RATIO;
-  const good = sortedPlaces.filter(p => p.score >= floor);
+  // Har användaren valt en typ av mat ska ett BEKRÄFTAT annat kök
+  // (cuisineTier 2) aldrig fylla ut listan så länge det finns rätt kök
+  // eller okänt kök kvar. Hellre två ärliga träffar än tre där en är fel
+  // mat — det var precis det som gjorde att valet kändes ignorerat.
+  let ranked = sortedPlaces;
+  const acceptableCuisine = sortedPlaces.filter(p => (p.cuisineTier ?? 0) < 2);
+  if(acceptableCuisine.length) ranked = acceptableCuisine;
+
+  const floor = ranked[0].score * MATCH_QUALITY_FLOOR_RATIO;
+  const good = ranked.filter(p => p.score >= floor);
 
   // BUGG SOM ÅTGÄRDATS: villkoret var tidigare
   //   if(pool.length < Math.min(n, good.length))
@@ -1692,7 +1830,9 @@ async function computeMatches(state){
     coords: state.coords,
     radiusKm: state.radius,
     budget: state.budget,
-    adventure: state.adventure
+    adventure: state.adventure,
+    // Riktade kökssökningar — se cuisineQueriesFor/searchTextRaw.
+    cuisineQueries: cuisineQueriesFor(state)
   });
 
   const userProfile = buildUserProfile(state);
@@ -3371,7 +3511,8 @@ function slotBonus(p, slot){
 
 async function computeEveningPlan(state){
   const raw = await PlacesProvider.getPlaces({
-    coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure
+    coords: state.coords, radiusKm: state.radius, budget: state.budget, adventure: state.adventure,
+    cuisineQueries: cuisineQueriesFor(state)
   });
   const userProfile = buildUserProfile(state);
   const places = applyHardFilters(raw, userProfile);
