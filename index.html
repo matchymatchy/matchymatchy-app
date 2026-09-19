@@ -754,7 +754,7 @@ const PlacesProvider = (() => {
         // Strukturerad öppettidsdata (dag/timme/minut för varje öppnings-
         // /stängningstillfälle) — "openNow" säger bara om stället är öppet
         // JUST NU (dvs. när man söker), inte om det fortfarande är öppet
-        // kl. 19:30 eller 22:00 ikväll. Används av isOpenAtEveningSlot() för
+        // kl. 18:00 eller 20:30 ikväll. Används av isOpenAtEveningSlot() för
         // att Ikväll-läget inte ska föreslå ett ställe som redan stängt när
         // man faktiskt tänkt gå dit — se computeEveningPlan.
         hoursPeriods: Array.isArray(p.regularOpeningHours?.periods) ? p.regularOpeningHours.periods : null,
@@ -3680,7 +3680,7 @@ async function computeEveningPlan(state){
   // redan hunnit stänga, ELLER stänger inom 90 minuter efter ankomst,
   // plockas bort INNAN poängsättningen — så det aldrig kan föreslås för
   // ett stopp man knappt hinner sätta sig ner vid.
-  const SLOT_TIMES = { main: [19, 30], late: [22, 0] };
+  const SLOT_TIMES = { main: [18, 0], late: [20, 30] };
   const bestInSlot = (slot) => {
     const [hour, minute] = SLOT_TIMES[slot];
     const sorted = places
@@ -3697,8 +3697,8 @@ async function computeEveningPlan(state){
   };
 
   return {
-    main:  { time:"19:30", label:"Middag",  place: bestInSlot('main') },
-    late:  { time:"22:00", label:"Efterfest", place: bestInSlot('late') }
+    main:  { time:"18:00", label:"Middag",  place: bestInSlot('main') },
+    late:  { time:"20:30", label:"Efterfest", place: bestInSlot('late') }
   };
 }
 
