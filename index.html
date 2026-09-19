@@ -987,8 +987,7 @@ const CUISINE_GROUPS = [
   { id:'italian',       emoji:'🇮🇹', label:'Italienskt',                       desc:'Pasta, pizza, risotto',                          cuisines:['italiensk'] },
   { id:'mediterranean', emoji:'🌍', label:'Medelhav & europeiskt',            desc:'Grekiskt, spanskt, franskt, Balkan',              cuisines:['grekisk','spansk','fransk'] },
   { id:'middleeast',    emoji:'🧆', label:'Mellanöstern & turkiskt',          desc:'Turkiskt, libanesiskt, persiskt m.m.',           cuisines:['turkisk','mellanöstern','persisk'] },
-  { id:'asian',         emoji:'🍜', label:'Asiatiskt',                        desc:'Japanskt, koreanskt, kinesiskt, thailändskt, vietnamesiskt', cuisines:['japansk','koreansk','kinesisk','thailändsk','vietnamesisk','asiatisk'] },
-  { id:'latin',         emoji:'🌮', label:'Amerikanskt & latinamerikanskt',   desc:'Mexikanskt, amerikanskt, BBQ, latinamerikanskt', cuisines:['mexikansk','amerikansk','latinamerikansk'] }
+  { id:'asian',         emoji:'🍜', label:'Asiatiskt',                        desc:'Japanskt, koreanskt, kinesiskt, thailändskt, vietnamesiskt', cuisines:['japansk','koreansk','kinesisk','thailändsk','vietnamesisk','asiatisk'] }
 ];
 const CUISINE_SURPRISE = { id:'surprise', emoji:'🎲', label:'Överraska mig', desc:'Hitta något ni sannolikt gillar men som ligger utanför era vanliga val.' };
 
@@ -1000,7 +999,7 @@ const CUISINE_SURPRISE = { id:'surprise', emoji:'🎲', label:'Överraska mig', 
 const SURPRISE_CUISINES = {
   turkisk:0.6, mellanöstern:0.7, koreansk:0.6, vietnamesisk:0.65,
   thailändsk:0.55, grekisk:0.5, spansk:0.5, fransk:0.45, kinesisk:0.5, fisk_skaldjur:0.45,
-  persisk:0.7, latinamerikansk:0.6
+  persisk:0.7
 };
 
 /* -------------------------------------------------------------------------
@@ -1659,13 +1658,31 @@ function selectTopMatches(sortedPlaces, state, n = 3){
   const floor = sortedPlaces[0].score * MATCH_QUALITY_FLOOR_RATIO;
   const good = sortedPlaces.filter(p => p.score >= floor);
 
-  let pool = good.filter(p => !state.seenNames.includes(p.name));
-  if(pool.length < Math.min(n, good.length)){
+  // BUGG SOM ÅTGÄRDATS: villkoret var tidigare
+  //   if(pool.length < Math.min(n, good.length))
+  // där good.length är ANTALET GODKÄNDA TOTALT (inklusive redan visade),
+  // medan pool är de som ÅTERSTÅR. Så fort det fanns färre än n ovisade
+  // kvar nollställdes seenNames och hela listan började om från toppen —
+  // och eftersom rankningen är helt deterministisk (stableJitter) blev
+  // resultatet exakt samma tre restauranger igen. Med en typisk träfflista
+  // på 4–5 godkända kandidater slog det till redan vid ANDRA sökningen,
+  // vilket är precis symptomet "jag får upp samma 3 varje gång".
+  //
+  // Nu: ta i första hand de ovisade. Räcker de inte till n fylls resten
+  // på från toppen igen (så man aldrig får ett tomt/uppenbart kort kort
+  // resultat), men cykeln nollställs BARA i det läget — inte så fort
+  // marginalen är knapp.
+  const unseen = good.filter(p => !state.seenNames.includes(p.name));
+  let picked = unseen.slice(0, n);
+
+  if(picked.length < n){
+    // Allt godkänt har visats — börja om cykeln, men undvik dubbletter
+    // inom just den här omgången.
     state.seenNames = [];
-    pool = good;
+    const fill = good.filter(p => !picked.includes(p));
+    picked = picked.concat(fill.slice(0, n - picked.length));
   }
 
-  const picked = pool.slice(0, n);
   picked.forEach(p => { if(!state.seenNames.includes(p.name)) state.seenNames.push(p.name); });
   return picked;
 }
