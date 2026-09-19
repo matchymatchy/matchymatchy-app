@@ -828,47 +828,55 @@ const PlacesProvider = (() => {
   // den bästa källan — annars bygger vi en egen mening av det vi faktiskt
   // vet (typ, stämning, betyg) istället för att bara upprepa betyget om
   // och om igen på varje kort.
-  // Väljer ETT utmärkande, verifierat faktum om stället — inte en stapel av
-  // generiska attribut.
+  // Väljer UPP TILL TVÅ utmärkande, verifierade fakta om stället — inte en
+  // stapel av generiska attribut, men heller inte bara en enda kort mening.
   //
-  // PROBLEMET SOM ÅTGÄRDATS: Googles `goodForGroups` och `servesBeer/Wine/
-  // Cocktails` är sanna för nästan varenda restaurang och bar. Att alltid
-  // lista dem gjorde att i princip alla kort fick texten "…med servering av
-  // alkohol och bra för grupper" — sant, men helt intetsägande, och alla
-  // restauranger började kännas likadana. De används nu bara som absolut
-  // sista utväg, och aldrig två samtidigt.
+  // PROBLEMET SOM ÅTGÄRDATS TIDIGARE: Googles `goodForGroups` och
+  // `servesBeer/Wine/Cocktails` är sanna för nästan varenda restaurang och
+  // bar. Att alltid lista dem gjorde att i princip alla kort fick texten
+  // "…med servering av alkohol och bra för grupper" — sant, men helt
+  // intetsägande. De används därför bara som absolut sista utväg, och
+  // aldrig fler än ett generiskt attribut i taget.
   //
-  // Prioritetsordning (första träffen vinner):
+  // Kandidater i prioritetsordning (de två första verkliga träffarna
+  // används, resten hoppas över):
   //   1. Googles egen editorialSummary — unik text om just DET HÄR stället
   //   2. specifik kategori ("Libanesisk restaurang", "Vinbar") — hoppas
   //      över om Google bara gav en generisk etikett som "Restaurang"
-  //   3. ovanliga, verifierade egenskaper (vegetariskt, uteservering)
-  //   4. anmärkningsvärt betyg (högt OCH väl belagt — inte en 5:a på 3 röster)
-  //   5. generiska attribut, ett enda, bara om inget annat finns
+  //   3. vegetariska alternativ
+  //   4. uteservering
+  //   5. anmärkningsvärt betyg (väl belagt — inte en 5:a på 3 röster)
+  //   6. generiskt attribut (grupper/alkohol) — bara om inget annat finns
   function liveTrait(p, typeLabel, atmosphere){
+    const facts = [];
+
     if(p.editorialSummary?.text){
       const text = p.editorialSummary.text.trim();
-      return text.endsWith(".") ? text : text + ".";
+      facts.push(text.endsWith(".") ? text : text + ".");
     }
 
     const label = (typeLabel || "").trim();
     const isGenericLabel = !label || /^(restaurang|restaurant|bar|café|cafe|matställe)$/i.test(label);
-    if(!isGenericLabel) return capitalizeFirst(label) + ".";
+    if(!isGenericLabel) facts.push(capitalizeFirst(label) + ".");
 
-    if(p.servesVegetarianFood) return "Har vegetariska alternativ på menyn.";
-    if(atmosphere.outdoorSeating) return "Har uteservering.";
+    if(p.servesVegetarianFood) facts.push("Har vegetariska alternativ på menyn.");
+    if(atmosphere.outdoorSeating) facts.push("Har uteservering.");
 
     if(typeof p.rating === "number" && p.rating >= 4.5 && (p.userRatingCount || 0) >= 100){
-      return `Högt betyg på Google — ${p.rating.toFixed(1)} av ${p.userRatingCount} recensioner.`;
-    }
-    if(typeof p.rating === "number" && (p.userRatingCount || 0) >= 30){
-      return `${p.rating.toFixed(1)} i betyg på Google (${p.userRatingCount} recensioner).`;
+      facts.push(`Högt betyg på Google — ${p.rating.toFixed(1)} av ${p.userRatingCount} recensioner.`);
+    } else if(typeof p.rating === "number" && (p.userRatingCount || 0) >= 30){
+      facts.push(`${p.rating.toFixed(1)} i betyg på Google (${p.userRatingCount} recensioner).`);
     }
 
-    // Sista utvägen — ETT generiskt attribut, aldrig flera staplade.
-    if(atmosphere.goodForGroups) return "Bra för sällskap enligt Google.";
-    if(atmosphere.servesAlcohol) return "Serverar alkohol.";
-    return label ? capitalizeFirst(label) + "." : "";
+    // Sista utvägen — ETT generiskt attribut, bara om vi annars stod helt
+    // utan text.
+    if(!facts.length){
+      if(atmosphere.goodForGroups) facts.push("Bra för sällskap enligt Google.");
+      else if(atmosphere.servesAlcohol) facts.push("Serverar alkohol.");
+      else if(label) facts.push(capitalizeFirst(label) + ".");
+    }
+
+    return facts.slice(0, 2).join(" ");
   }
 
   // capitalizeFirst() lever i global scope (definieras längre ner i filen)
