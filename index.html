@@ -751,6 +751,13 @@ const PlacesProvider = (() => {
           ? p.currentOpeningHours.openNow
           : (typeof p.regularOpeningHours?.openNow === "boolean" ? p.regularOpeningHours.openNow : null),
         weekdayHours: p.regularOpeningHours?.weekdayDescriptions || null,
+        // Strukturerad öppettidsdata (dag/timme/minut för varje öppnings-
+        // /stängningstillfälle) — "openNow" säger bara om stället är öppet
+        // JUST NU (dvs. när man söker), inte om det fortfarande är öppet
+        // kl. 19:30 eller 22:00 ikväll. Används av isOpenAtEveningSlot() för
+        // att Ikväll-läget inte ska föreslå ett ställe som redan stängt när
+        // man faktiskt tänkt gå dit — se computeEveningPlan.
+        hoursPeriods: Array.isArray(p.regularOpeningHours?.periods) ? p.regularOpeningHours.periods : null,
         isChain: isQuickServiceChain(p),
         servesVegetarianFood: !!p.servesVegetarianFood,
         outdoorSeating: !!p.outdoorSeating
@@ -1662,6 +1669,66 @@ function todayHoursLine(weekdayHours){
   const jsDay = new Date().getDay(); // 0=sön..6=lör
   const isoIndex = (jsDay + 6) % 7;  // 0=mån..6=sön, samma ordning som Google
   return weekdayHours[isoIndex] || null;
+}
+
+// Avgör om ett ställe rimligen fortfarande är öppet vid en given klockslag
+// SENARE ikväll (t.ex. 22:00 för efterfesten). "openNow" (Googles fält)
+// räcker inte till det här — det säger bara om stället är öppet i det
+// ögonblick man söker, inte om det hunnit stänga innan man faktiskt kommer
+// dit. Det var precis det som gjorde att en efterfest-restaurang med
+// stängning 22:00 kunde föreslås till ett stopp klockan 22:00.
+//
+// Bygger på Googles strukturerade periods (dag/timme/minut för varje
+// öppnings-/stängningstillfälle) — hanterar även ställen som stänger efter
+// midnatt (t.ex. öppet fredag 18–02), där stängningen formellt ligger på
+// NÄSTA veckodag.
+//
+// Om vi INTE har periods-data (t.ex. mockdata, eller Google saknar
+// öppettider för stället) returneras true — okänt ska aldrig tolkas som
+// stängt, bara som "vi vet inte", precis som resten av appens
+// confidence-principer.
+function isOpenAtEveningSlot(p, hour, minute = 0){
+  if(!Array.isArray(p.hoursPeriods) || !p.hoursPeriods.length) return true;
+
+  const now = new Date();
+  const todayJs = now.getDay(); // 0=sön..6=lör, samma som Googles "day"-fält i periods
+  const targetMinutes = hour * 60 + minute;
+
+  return p.hoursPeriods.some(period => {
+    if(!period.open) return false;
+    const openDay = period.open.day;
+    const openMinutes = (period.open.hour || 0) * 60 + (period.open.minute || 0);
+
+    // Öppnar stället EFTER klockslaget vi frågar om (och samma dag), kan
+    // det inte vara öppet då — oavsett stängningstid.
+    if(openDay === todayJs && openMinutes > targetMinutes) return false;
+
+    if(!period.close){
+      // Inget stängningstillfälle angivet = öppet dygnet runt från
+      // öppningstillfället. Räknas som öppet så länge det redan öppnat idag
+      // (eller öppnade tidigare dagar och aldrig stänger).
+      return openDay === todayJs || openDay === (todayJs + 6) % 7;
+    }
+
+    const closeDay = period.close.day;
+    const closeMinutes = (period.close.hour || 0) * 60 + (period.close.minute || 0);
+
+    if(openDay === todayJs){
+      // Stänger senare samma dag — enkla fallet.
+      if(closeDay === openDay) return closeMinutes > targetMinutes;
+      // Stänger efter midnatt (nästa dag) — öppet ända till dess.
+      return true;
+    }
+
+    // Öppnade GÅRDAGENS datum och stänger idag efter midnatt — täcker
+    // t.ex. "öppet till 02:00" som fortfarande gäller vid 22:00-frågan bara
+    // om stängningen faktiskt ligger efter targetMinutes idag.
+    if(openDay === (todayJs + 6) % 7 && closeDay === todayJs){
+      return closeMinutes > targetMinutes;
+    }
+
+    return false;
+  });
 }
 
 let hoursBlockCounter = 0;
@@ -3600,9 +3667,16 @@ async function computeEveningPlan(state){
   const userProfile = buildUserProfile(state);
   const places = applyHardFilters(raw, userProfile);
   const usedInPlan = new Set();
+  // hour/minute för respektive stopp — matchar de klockslag som visas i
+  // planen nedan. Ett ställe som med säkerhet (se isOpenAtEveningSlot)
+  // redan hunnit stänga vid det klockslaget plockas bort INNAN
+  // poängsättningen, så det aldrig kan föreslås för det stoppet.
+  const SLOT_TIMES = { early: [17, 30], main: [19, 30], late: [22, 0] };
   const bestInSlot = (slot) => {
+    const [hour, minute] = SLOT_TIMES[slot];
     const sorted = places
       .filter(p => !usedInPlan.has(p.name))
+      .filter(p => isOpenAtEveningSlot(p, hour, minute))
       .map(p => {
         const scored = scoreCandidate(p, userProfile);
         return { ...scored, score: scored.score + slotBonus(p, slot) };
